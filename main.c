@@ -1,3 +1,4 @@
+#include <SDL2/SDL.h>
 #include <time.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -27,6 +28,7 @@
 #define READF_C (F & 0b00001000)
 
 int cpu_step(void);
+int ppu_step(void);
 void show_registers(void);
 void show_cartridge_info();
 void mem_write8(uint16_t addr, uint8_t b);
@@ -74,6 +76,20 @@ int main(int argc, char **argv) {
 
     uint16_t cycles = 0;
 
+
+
+
+    SDL_Init(SDL_INIT_VIDEO);
+    SDL_Window *window = SDL_CreateWindow(
+            "GB Emulator",
+            SDL_WINDOWPOS_CENTERED,
+            SDL_WINDOWPOS_CENTERED,
+            160 * 3, 144 * 3,
+            SDL_WINDOW_SHOWN
+    );
+
+    SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, 0);
+
     while (true) {
        cycles +=  cpu_step();
        if (debug == true) {
@@ -84,6 +100,20 @@ int main(int argc, char **argv) {
     return EXIT_SUCCESS;
 }
 
+// 160x144
+// GB has three layers: the Background, the Window and the Objects
+//
+// TILE: pixels grouped in 8x8 squares. The base unit in GB graphics
+//       a tile assigns a color index to each of its pixels from 0 to 3 (2 bits)
+//       Tile data is stored in VRAM 0x8000 - 0x97FF so we can store up to 384 tiles.:
+//              (6143 bytes / (64 bits * 2 / 8) = 384
+//
+// OBJECT: 1 or 2 stacked tiles (8x8 or 8x16) that can be displayed anywhere on the screen
+//
+int ppu_step(void) {
+
+    return 0;
+}
 int cpu_step(void) {
     
     uint8_t n8 = 0;
