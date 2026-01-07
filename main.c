@@ -36,7 +36,7 @@ void mem_write16(uint16_t addr, uint16_t b);
 void dec_reg16(uint8_t *low, uint8_t *high);
 void inc_reg16(uint8_t *low, uint8_t *high);
 
-bool debug = false;
+bool debug = true;
 uint8_t rom[2000000];
 
 uint8_t A = 0;  // A
@@ -80,8 +80,6 @@ int main(int argc, char **argv) {
     show_cartridge_info();
 
     uint16_t cycles = 0;
-
-
 
     /*
        SDL_Init(SDL_INIT_VIDEO);
@@ -346,6 +344,31 @@ int cpu_step(void) {
             if (debug) printf("LD H, 0x%02X\n", B);
             PC += 2;
             return 8;
+        case 0x27: // DAA b=1 c=4 flags=Z-0C
+            if (debug) printf("DAA\n");
+            {
+                uint8_t correction = 0;
+
+                if (READF_N) {
+                    // After subtraction
+                    if (READF_H) correction |= 0x06;
+                    if (READF_C) correction |= 0x60;
+                    A -= correction;
+                } else {
+                    // After addition
+                    if (READF_H || (A & 0x0F) > 0x09) correction |= 0x06;
+                    if (READF_C || A > 0x99) {
+                        correction |= 0x60;
+                        SETF_C;
+                    }
+                    A += correction;
+                }
+
+                if (A == 0) SETF_Z; else CLRF_Z;
+                CLRF_H;
+            }
+            PC += 1;
+            return 4;
         case 0x28: // JR Z, <e8> c=[12,8] b=2
             e8 = (int8_t)rom[PC + 1];
             if (debug) printf("JR Z, 0x%02X\n", e8);
@@ -596,6 +619,22 @@ int cpu_step(void) {
             if (A == 0) SETF_Z; else CLRF_Z;
             CLRF_N; CLRF_H; CLRF_C;
             PC += 1;
+            return 4;
+        case 0xB9: // CP A, C  c=4, b=1 flags=Z=Z, N=1, H=H, C=C
+            if (debug) printf("CP A, C\n");
+            if (A == C) SETF_Z; else CLRF_Z;
+            SETF_N;
+            if ((A & 0x0F) > (C & 0x0F)) SETF_H; else CLRF_H;
+            if (A > C) SETF_C; else CLRF_C;
+            PC += 2;
+            return 4;
+        case 0xBA: // CP A, D  c=4, b=1 flags=Z=Z, N=1, H=H, C=C
+            if (debug) printf("CP A, D\n");
+            if (A == D) SETF_Z; else CLRF_Z;
+            SETF_N;
+            if ((A & 0x0F) > (D & 0x0F)) SETF_H; else CLRF_H;
+            if (A > D) SETF_C; else CLRF_C;
+            PC += 2;
             return 4;
         case 0xBB: // CP A, E  c=4, b=1 flags=Z=Z, N=1, H=H, C=C
             if (debug) printf("CP A, E\n");
