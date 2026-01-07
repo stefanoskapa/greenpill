@@ -171,11 +171,24 @@ int cpu_step(void) {
             if (debug) printf("LD BC, 0x%04X\n", n16);
             PC += 3;
             return 12;
+        case 0x02: // LD [BC], A c=8, b=1 flags=none
+            if (debug) printf("LD [BC], A\n");
+            mem_write8(BC, A);
+            PC += 1;
+            return 8;
         case 0x03: // INC BC b=1 c=8 flags = none
             if (debug) printf("INC BC\n");
             inc_reg16(&C, &B);
             PC += 1;
             return 8;
+        case 0x04: // INC B  c=4 b=1 flags: Z=Z N=0 H=H C=-
+            if (debug) printf("INC B\n");
+            if ((B & 0x0F) == 0x0F) SETF_H; else CLRF_H;
+            B++;
+            if (B == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            PC += 1;
+            return 4;
         case 0x05:  // DEC B    c=4, b=1, flags= Z=Z N=1 H=H C=-
             if (debug) printf("DEC B\n");
             if ((B & 0x0F) == 0x00) SETF_H; else CLRF_H;
