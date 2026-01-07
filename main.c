@@ -36,7 +36,7 @@ void mem_write16(uint16_t addr, uint16_t b);
 void dec_reg16(uint8_t *low, uint8_t *high);
 void inc_reg16(uint8_t *low, uint8_t *high);
 
-bool debug = true;
+bool debug = false;
 uint8_t rom[2000000];
 
 uint8_t A = 0;  // A
@@ -44,7 +44,7 @@ uint8_t F = 0; // Flags register (can't be accesed directly)
 
 uint8_t B = 0; //BC high
 uint8_t C = 0; //BC low
-    
+
 uint8_t D = 0; // DE high
 uint8_t E = 0; // DE low
 
@@ -56,7 +56,7 @@ uint16_t PC = 0x0100;
 
 int ppu_dots = 0;
 uint8_t *ppu_ly = &rom[0xFF44]; //0xFF44h 
-//int ppu_scanline = 0;
+                                //int ppu_scanline = 0;
 int main(int argc, char **argv) {
 
     if (argc < 2) {
@@ -83,25 +83,25 @@ int main(int argc, char **argv) {
 
 
 
-/*
-    SDL_Init(SDL_INIT_VIDEO);
-    SDL_Window *window = SDL_CreateWindow(
-            "GB Emulator",
-            SDL_WINDOWPOS_CENTERED,
-            SDL_WINDOWPOS_CENTERED,
-            160 * 3, 144 * 3,
-            SDL_WINDOW_SHOWN
-    );
+    /*
+       SDL_Init(SDL_INIT_VIDEO);
+       SDL_Window *window = SDL_CreateWindow(
+       "GB Emulator",
+       SDL_WINDOWPOS_CENTERED,
+       SDL_WINDOWPOS_CENTERED,
+       160 * 3, 144 * 3,
+       SDL_WINDOW_SHOWN
+       );
 
-    SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, 0);
-*/
+       SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, 0);
+       */
     while (true) {
 
-       cycles =  cpu_step();
-       if (debug == true) {
+        cycles =  cpu_step();
+        if (debug == true) {
             show_registers();
-       }
-       ppu_step(cycles);
+        }
+        ppu_step(cycles);
     }
 
     return EXIT_SUCCESS;
@@ -140,7 +140,7 @@ int ppu_step(int cycles) {
     } else if (ppu_dots <= 80) {
         // OAM scan (mode 2)
     } else if (ppu_dots <= 80 + 172) {
-       // drawing (mode 3) 
+        // drawing (mode 3) 
     } else {
         // HBlank (mode 0)
     }
@@ -149,7 +149,7 @@ int ppu_step(int cycles) {
 }
 
 int cpu_step(void) {
-    
+
     uint8_t n8 = 0;   // 8-bit integer signed or unsigned
     uint16_t n16 = 0; // 16-bit integer signed or unsigned
     int8_t e8 = 0;    // 8-bit signed offset!
@@ -266,6 +266,14 @@ int cpu_step(void) {
             if (E == 0) SETF_Z; else CLRF_Z;
             PC += 1;
             return 4;
+        case 0x1D:  // DEC E    c=4, b=1, flags= Z=Z N=1 H=H C=-
+            if (debug) printf("DEC E\n");
+            if ((E & 0x0F) == 0x00) SETF_H; else CLRF_H;
+            E--;
+            if (E == 0) SETF_Z; else CLRF_Z;
+            SETF_N;
+            PC += 1;
+            return 4;
         case 0x1F: //RRA b=1 c=4 flags=000C
             if (debug) printf("RRA\n");
             bool oldCarry = (READF_C != 0);  // Save old carry FIRST
@@ -312,6 +320,19 @@ int cpu_step(void) {
             CLRF_N;
             PC += 1;
             return 4;
+        case 0x25:  // DEC H    c=4, b=1, flags= Z=Z N=1 H=H C=-
+            if (debug) printf("DEC H\n");
+            if ((H & 0x0F) == 0x00) SETF_H; else CLRF_H;
+            H--;
+            if (H == 0) SETF_Z; else CLRF_Z;
+            SETF_N;
+            PC += 1;
+            return 4;
+        case 0x26: // LD H, <n8>        c=8, b=2, flags=none
+            H = rom[PC + 1];
+            if (debug) printf("LD H, 0x%02X\n", B);
+            PC += 2;
+            return 8;
         case 0x28: // JR Z, <e8> c=[12,8] b=2
             e8 = (int8_t)rom[PC + 1];
             if (debug) printf("JR Z, 0x%02X\n", e8);
@@ -323,6 +344,15 @@ int cpu_step(void) {
                 return 8;
             }
             return 12; 
+        case 0x29: //ADD HL, HL   b=1 c=8, flags=Z0HC
+            if (debug) printf("ADD A, A\n");
+            if (A + A > 0xFF) SETF_C; else CLRF_C;
+            if ( (A & 0x0F) + (A & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+            A += A;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            PC += 2;
+            return 8;
         case 0x2A:  //
             if (debug) printf("LD A, [HL+]\n");
             A = rom[L | (H << 8)];
@@ -354,43 +384,51 @@ int cpu_step(void) {
                 return 12;
             }
             return 8;
-    /*
-        case 0x30: // JR NC, <e8> b=2 c=[12,8] flags=none
-            e8 = (int8_t)rom[PC + 1];
-            if (debug) printf("JR NC, 0x%04X\n", PC + e8 + 2);
-            PC += 2;
-            if (READF_C == 0) {
-                PC += e8;
-                return 12;
-            }
-            return 8; 
-            */
+            /*
+               case 0x30: // JR NC, <e8> b=2 c=[12,8] flags=none
+               e8 = (int8_t)rom[PC + 1];
+               if (debug) printf("JR NC, 0x%04X\n", PC + e8 + 2);
+               PC += 2;
+               if (READF_C == 0) {
+               PC += e8;
+               return 12;
+               }
+               return 8; 
+               */
         case 0x31: //LD SP, <n16>   c=12, b=3, flags=none
-           n16 = rom[PC + 1] | (rom[PC + 2] << 8);
-           if (debug) printf("LD SP, 0x%04X\n", n16);
-           SP = n16;
-           PC += 3;
-           return 12;
+            n16 = rom[PC + 1] | (rom[PC + 2] << 8);
+            if (debug) printf("LD SP, 0x%04X\n", n16);
+            SP = n16;
+            PC += 3;
+            return 12;
         case 0x32: // LD (HL-), A   c=8, b=1 flags=none
-           if (debug) printf("LD [HL-], A\n");
-           mem_write8(L | (H << 8), A); 
-           dec_reg16(&L, &H);
-           PC += 1;
-           return 8;
+            if (debug) printf("LD [HL-], A\n");
+            mem_write8(L | (H << 8), A); 
+            dec_reg16(&L, &H);
+            PC += 1;
+            return 8;
         case 0x35: // DEC [HL] b1 c12 flags:Z1H-
-           if (debug) printf("DEC [HL]\n");
-           rom[HL] = rom[HL] - 1;
-           if (rom[HL] == 0) SETF_Z; else CLRF_Z;
-           SETF_N;
-           if (rom[HL] == 0xFF) SETF_H; CLRF_H;
-           PC += 1;
-           return 12;
+            if (debug) printf("DEC [HL]\n");
+            rom[HL] = rom[HL] - 1;
+            if (rom[HL] == 0) SETF_Z; else CLRF_Z;
+            SETF_N;
+            if (rom[HL] == 0xFF) SETF_H; CLRF_H;
+            PC += 1;
+            return 12;
         case 0x36: // LD [HL], <n8>  c=12, b=2 flags=none
-           n8 = rom[PC + 1];
-           if (debug) printf("LD [HL], 0x%02X\n", n8);
-           mem_write8(HL, n8);
-           PC += 2;
-           return 12;
+            n8 = rom[PC + 1];
+            if (debug) printf("LD [HL], 0x%02X\n", n8);
+            mem_write8(HL, n8);
+            PC += 2;
+            return 12;
+        case 0x3C: // INC A  c=4 b=1 flags: Z=Z N=0 H=H C=-
+            if (debug) printf("INC A\n");
+            if ((A & 0x0F) == 0x0F) SETF_H; else CLRF_H;
+            A++;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            PC += 1;
+            return 4;
         case 0x3D:  // DEC A    c=4, b=1, flags= Z=Z N=1 H=H C=-
             if (debug) printf("DEC A\n");
             if ((A & 0x0F) == 0x00) SETF_H; else CLRF_H;
@@ -420,24 +458,74 @@ int cpu_step(void) {
             C = rom[HL];
             PC += 1;
             return 8;
+        case 0x4F: //LD C, A  b=1, c=4 flags=none
+            if (debug) printf("LD C, A\n");
+            C = A;
+            PC += 1;
+            return 4;
         case 0x56: //LD D, [HL] b=1 c=8 flags=none
             if (debug) printf("LD D, [HL]\n");
             D = rom[HL];
             PC += 1;
             return 8;
+        case 0x57: //LD D, A  b=1, c=4 flags=none
+            if (debug) printf("LD D, A\n");
+            D = A;
+            PC += 1;
+            return 4;
+        case 0x5F: //LD E, A b1 c4
+            if (debug) printf("LD E, A\n");
+            E = A;
+            PC += 1;
+            return 4;
         case 0x6E: //LD L, [HL] b1 c8 flags=none
             if (debug) printf("LD L, [HL]\n");
             L = rom[HL];
             PC += 1;
             return 8;
+        case 0x6F: //LD L, A  c=4 b=1 flags=none
+            if (debug) printf("LD L, A\n");
+            L = A;
+            PC += 1;
+            return 8;
+        case 0x70: // LD [HL], B   c=8, b=1 flags=none
+            if (debug) printf("LD [HL], B\n");
+            mem_write8(L | (H << 8), B); 
+            PC += 1;
+            return 8;
+        case 0x71: // LD [HL], C   c=8, b=1 flags=none
+            if (debug) printf("LD [HL], C\n");
+            mem_write8(L | (H << 8), C); 
+            PC += 1;
+            return 8;
+        case 0x72: // LD [HL], D   c=8, b=1 flags=none
+            if (debug) printf("LD [HL], D\n");
+            mem_write8(L | (H << 8), D); 
+            PC += 1;
+            return 8;
         case 0x77: // LD [HL], A   c=8, b=1 flags=none
-           if (debug) printf("LD [HL], A\n");
-           mem_write8(L | (H << 8), A); 
-           PC += 1;
-           return 8;
+            if (debug) printf("LD [HL], A\n");
+            mem_write8(L | (H << 8), A); 
+            PC += 1;
+            return 8;
         case 0x78: //LD A, B  b=1, c=4 flags=none
             if (debug) printf("LD A, B\n");
             A = B;
+            PC += 1;
+            return 4;
+        case 0x79: //LD A, D  b=1, c=4 flags=none
+            if (debug) printf("LD A, D\n");
+            A = D;
+            PC += 1;
+            return 4;
+        case 0x7A: //LD C, A  b=1, c=4 flags=none
+            if (debug) printf("LD C, A\n");
+            C = A;
+            PC += 1;
+            return 4;
+        case 0x7B: //LD A, E  b=1, c=4 flags=none
+            if (debug) printf("LD A, E\n");
+            A = E;
             PC += 1;
             return 4;
         case 0x7C: // LD A, H b = 1, c=4, flags=none
@@ -483,7 +571,7 @@ int cpu_step(void) {
             PC += 1;
             return 4;
         case 0xB6: // OR A, [HL] b=1 c=8 flags Z000
-            printf("OR A, [HL]\n");
+            if (debug) printf("OR A, [HL]\n");
             A = A | rom[HL];
             if (A == 0) SETF_Z; else CLRF_Z;
             CLRF_N; CLRF_H; CLRF_C;
@@ -496,11 +584,28 @@ int cpu_step(void) {
             CLRF_N; CLRF_H; CLRF_C;
             PC += 1;
             return 4;
+        case 0xBB: // CP A, E  c=4, b=1 flags=Z=Z, N=1, H=H, C=C
+            if (debug) printf("CP A, E\n");
+            if (A == E) SETF_Z; else CLRF_Z;
+            SETF_N;
+            if ((A & 0x0F) > (E & 0x0F)) SETF_H; else CLRF_H;
+            if (A > E) SETF_C; else CLRF_C;
+            PC += 2;
+            return 4;
         case 0xC1: // POP BC b= 1 c=12 flags none
             C = rom[SP];
             B = rom[SP + 1];
             SP += 2;
             PC += 1;
+            return 12;
+        case 0xC2: //JP NZ <a16>   b3 c[16,12] flags=none
+            a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
+            if (debug) printf("JP NZ 0x%04X", a16);
+            if (READF_Z == 0) {
+                PC = a16;
+                return 16;
+            }
+            PC += 3;
             return 12;
         case 0xC3: // JP <a16>      c=16, b=3
             a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
@@ -534,17 +639,17 @@ int cpu_step(void) {
             CLRF_N;
             PC += 2;
             return 8;
-            case 0xC8: //RET Z b=1 c[20, 8] flags=none
-    if (debug) printf("RET Z\n");
-    if (READF_Z != 0) {
-        uint8_t low5 = rom[SP];
-        uint8_t high5 = rom[SP + 1];
-        SP += 2;
-        PC = (high5 << 8) | low5;
-        return 20;
-    }
-    PC += 1;
-    return 8;
+        case 0xC8: //RET Z b=1 c[20, 8] flags=none
+            if (debug) printf("RET Z\n");
+            if (READF_Z != 0) {
+                uint8_t low5 = rom[SP];
+                uint8_t high5 = rom[SP + 1];
+                SP += 2;
+                PC = (high5 << 8) | low5;
+                return 20;
+            }
+            PC += 1;
+            return 8;
         case 0xC9: //RET b=1 c=16
             if (debug) printf("RET \n");
             {}
@@ -553,143 +658,278 @@ int cpu_step(void) {
             SP += 2;
             PC= (high << 8) | low;
             return 16;
+        case 0xCB: { // PREFIX
+                       uint8_t cb_op = rom[PC + 1];
+                       if (debug) printf("CB %02X: ", cb_op);
+
+                       uint8_t *reg;
+                       uint8_t hl_val;
+                       int cycles = 8;
+
+                       switch (cb_op & 0x07) {
+                           case 0: reg = &B; break;
+                           case 1: reg = &C; break;
+                           case 2: reg = &D; break;
+                           case 3: reg = &E; break;
+                           case 4: reg = &H; break;
+                           case 5: reg = &L; break;
+                           case 6: hl_val = rom[HL]; reg = &hl_val; cycles = 16; break;
+                           case 7: reg = &A; break;
+                       }
+
+                       uint8_t op_type = cb_op >> 3;
+
+                       if (op_type < 8) {
+                           // Rotates and shifts (0x00-0x3F)
+                           switch (op_type) {
+                               case 0: // RLC
+                                   if (debug) printf("RLC\n");
+                                   if (*reg & 0x80) SETF_C; else CLRF_C;
+                                   *reg = (*reg << 1) | (*reg >> 7);
+                                   if (*reg == 0) SETF_Z; else CLRF_Z;
+                                   CLRF_N; CLRF_H;
+                                   break;
+                               case 1: // RRC
+                                   if (debug) printf("RRC\n");
+                                   if (*reg & 0x01) SETF_C; else CLRF_C;
+                                   *reg = (*reg >> 1) | (*reg << 7);
+                                   if (*reg == 0) SETF_Z; else CLRF_Z;
+                                   CLRF_N; CLRF_H;
+                                   break;
+                               case 2: // RL
+                                   if (debug) printf("RL\n");
+                                   {
+                                       uint8_t old_carry = (READF_C != 0) ? 1 : 0;
+                                       if (*reg & 0x80) SETF_C; else CLRF_C;
+                                       *reg = (*reg << 1) | old_carry;
+                                   }
+                                   if (*reg == 0) SETF_Z; else CLRF_Z;
+                                   CLRF_N; CLRF_H;
+                                   break;
+                               case 3: // RR
+                                   if (debug) printf("RR\n");
+                                   {
+                                       uint8_t old_carry = (READF_C != 0) ? 0x80 : 0;
+                                       if (*reg & 0x01) SETF_C; else CLRF_C;
+                                       *reg = (*reg >> 1) | old_carry;
+                                   }
+                                   if (*reg == 0) SETF_Z; else CLRF_Z;
+                                   CLRF_N; CLRF_H;
+                                   break;
+                               case 4: // SLA
+                                   if (debug) printf("SLA\n");
+                                   if (*reg & 0x80) SETF_C; else CLRF_C;
+                                   *reg = *reg << 1;
+                                   if (*reg == 0) SETF_Z; else CLRF_Z;
+                                   CLRF_N; CLRF_H;
+                                   break;
+                               case 5: // SRA
+                                   if (debug) printf("SRA\n");
+                                   if (*reg & 0x01) SETF_C; else CLRF_C;
+                                   *reg = (*reg >> 1) | (*reg & 0x80); // preserve bit 7
+                                   if (*reg == 0) SETF_Z; else CLRF_Z;
+                                   CLRF_N; CLRF_H;
+                                   break;
+                               case 6: // SWAP
+                                   if (debug) printf("SWAP\n");
+                                   *reg = ((*reg & 0x0F) << 4) | ((*reg & 0xF0) >> 4);
+                                   if (*reg == 0) SETF_Z; else CLRF_Z;
+                                   CLRF_N; CLRF_H; CLRF_C;
+                                   break;
+                               case 7: // SRL
+                                   if (debug) printf("SRL\n");
+                                   if (*reg & 0x01) SETF_C; else CLRF_C;
+                                   *reg = *reg >> 1;
+                                   if (*reg == 0) SETF_Z; else CLRF_Z;
+                                   CLRF_N; CLRF_H;
+                                   break;
+                           }
+                       } else if (op_type < 16) {
+                           // BIT (0x40-0x7F)
+                           uint8_t bit = op_type - 8;
+                           if (debug) printf("BIT %d\n", bit);
+                           if ((*reg & (1 << bit)) == 0) SETF_Z; else CLRF_Z;
+                           CLRF_N;
+                           SETF_H;
+                           if ((cb_op & 0x07) == 6) cycles = 12; // BIT b,[HL] is 12 cycles
+                       } else if (op_type < 24) {
+                           // RES (0x80-0xBF)
+                           uint8_t bit = op_type - 16;
+                           if (debug) printf("RES %d\n", bit);
+                           *reg &= ~(1 << bit);
+                       } else {
+                           // SET (0xC0-0xFF)
+                           uint8_t bit = op_type - 24;
+                           if (debug) printf("SET %d\n", bit);
+                           *reg |= (1 << bit);
+                       }
+
+                       // Write back to [HL] if needed
+                       if ((cb_op & 0x07) == 6 && op_type != 8 && op_type != 9 && op_type != 10 &&
+                               op_type != 11 && op_type != 12 && op_type != 13 && op_type != 14 && op_type != 15) {
+                           // Not a BIT instruction, write back
+                           mem_write8(HL, hl_val);
+                       }
+
+                       PC += 2;
+                       return cycles;
+                   }
         case 0xCD: // CALL <a16> c=24, b=3 flags=none
-            a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
-            if (debug) printf("CALL 0x%04X\n", a16);
-            SP -= 2;
-            mem_write16(SP, PC + 3);
-            PC = a16;
-            return 24;
+                   a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
+                   if (debug) printf("CALL 0x%04X\n", a16);
+                   SP -= 2;
+                   mem_write16(SP, PC + 3);
+                   PC = a16;
+                   return 24;
         case 0xCE: { // ADC A, <n8>  b=2, c=8, flags=Z0HC
-            n8 = rom[PC + 1];
-            if (debug) printf("ADC A, 0x%02X\n", n8);
-            uint8_t carry = (READF_C != 0) ? 1 : 0;
-            uint16_t result = A + n8 + carry;
-            if (((A & 0x0F) + (n8 & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
-            if (result > 0xFF) SETF_C; else CLRF_C;
-            A = (uint8_t)result;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N;
-            PC += 2;
-            return 8;
-        }
-                   case 0xD0: //RET NC b=1 c[20, 8] flags=none
-    if (debug) printf("RET NC\n");
-    if (READF_C == 0) {
-        uint8_t low4 = rom[SP];
-        uint8_t high4 = rom[SP + 1];
-        SP += 2;
-        PC = (high4 << 8) | low4;
-        return 20;
-    }
-    PC += 1;
-    return 8;
+                       n8 = rom[PC + 1];
+                       if (debug) printf("ADC A, 0x%02X\n", n8);
+                       uint8_t carry = (READF_C != 0) ? 1 : 0;
+                       uint16_t result = A + n8 + carry;
+                       if (((A & 0x0F) + (n8 & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+                       if (result > 0xFF) SETF_C; else CLRF_C;
+                       A = (uint8_t)result;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       CLRF_N;
+                       PC += 2;
+                       return 8;
+                   }
+        case 0xD0: //RET NC b=1 c[20, 8] flags=none
+                   if (debug) printf("RET NC\n");
+                   if (READF_C == 0) {
+                       uint8_t low4 = rom[SP];
+                       uint8_t high4 = rom[SP + 1];
+                       SP += 2;
+                       PC = (high4 << 8) | low4;
+                       return 20;
+                   }
+                   PC += 1;
+                   return 8;
+        case 0xD1: // POP DE b= 1 c=12 flags none
+                   if (debug) printf("POP DE\n");
+                   E = rom[SP];
+                   D = rom[SP + 1];
+                   SP += 2;
+                   PC += 1;
+                   return 12;
         case 0xD5: // PUSH DE b=1 c=16 flags=none
-            if (debug) printf("PUSH DE\n");
-            SP -= 2;
-            mem_write16(SP, DE);
-            PC += 1;
-            return 16;
+                   if (debug) printf("PUSH DE\n");
+                   SP -= 2;
+                   mem_write16(SP, DE);
+                   PC += 1;
+                   return 16;
         case 0xD6: //SUB A, <n8> b=2 c=8 flags=Z1HC
-            n8 = rom[PC + 1];
-            if (debug) printf("SUB A, 0x%02X\n", n8);
-            if (n8 > A) SETF_C; else CLRF_C;
-            if ((n8 & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
-            SETF_N;
-            A -= n8;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            PC += 2;
-            return 8;
+                   n8 = rom[PC + 1];
+                   if (debug) printf("SUB A, 0x%02X\n", n8);
+                   if (n8 > A) SETF_C; else CLRF_C;
+                   if ((n8 & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+                   SETF_N;
+                   A -= n8;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   PC += 2;
+                   return 8;
         case 0xE0: // LDH <a8>, A c=12, b = 2 flags=none
-            a8 = rom[PC + 1];
-            uint16_t addr = 0xFF00 + a8;
-            if (debug) printf("LDH 0x%04X, A\n", addr);
-            mem_write8(addr, A);
-            PC += 2;
-            return 12;
+                   a8 = rom[PC + 1];
+                   uint16_t addr = 0xFF00 + a8;
+                   if (debug) printf("LDH 0x%04X, A\n", addr);
+                   mem_write8(addr, A);
+                   PC += 2;
+                   return 12;
         case 0xE1: // POP HL b- 1 c=12 flags none
-            {}
-            uint8_t low1 = rom[SP];
-            uint8_t high1 = rom[SP + 1];
-            SP += 2;
-            L = low1;
-            H = high1;
-            PC += 1;
-            return 12;
+                   {}
+                   uint8_t low1 = rom[SP];
+                   uint8_t high1 = rom[SP + 1];
+                   SP += 2;
+                   L = low1;
+                   H = high1;
+                   PC += 1;
+                   return 12;
         case 0xE2: //LDH [C], A  c=8, b=1
-            if (debug) printf("LDH [C], A\n");
-            mem_write8(0xFF00 + C, A);
-            PC += 1;
-            return 8;
+                   if (debug) printf("LDH [C], A\n");
+                   mem_write8(0xFF00 + C, A);
+                   PC += 1;
+                   return 8;
         case 0xE5: // PUSH HL  b=1 c=16 flags=none
-            if (debug) printf("PUSH HL\n");
-            SP -= 2;
-            mem_write16(SP, HL);
-            PC += 1;
-            return 16;
+                   if (debug) printf("PUSH HL\n");
+                   SP -= 2;
+                   mem_write16(SP, HL);
+                   PC += 1;
+                   return 16;
         case 0xE6: // AND A, <n8> b=2 c=8 flags: Z010
-            n8 = rom[PC + 1];
-            if (debug) printf("AND A, 0x%02X\n", n8);
-            A = A & n8;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N; SETF_H; CLRF_C;
-            PC += 2;
-            return 8;
+                   n8 = rom[PC + 1];
+                   if (debug) printf("AND A, 0x%02X\n", n8);
+                   A = A & n8;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; SETF_H; CLRF_C;
+                   PC += 2;
+                   return 8;
+        case 0xE9: // JP HL b1 c4 flags=none
+                   if (debug) printf("JP HL\n");
+                   PC = HL;
+                   return 4;
         case 0xEA: //LD [a16], A  c=16 b=3 flags=none
-            a16 = rom[PC + 1] | (rom[PC + 2] << 8);
-            if (debug) printf("LD 0x%04X, A\n", a16);
-            mem_write8(a16, A);
-            PC += 3;
-            return 16;
+                   a16 = rom[PC + 1] | (rom[PC + 2] << 8);
+                   if (debug) printf("LD 0x%04X, A\n", a16);
+                   mem_write8(a16, A);
+                   PC += 3;
+                   return 16;
+        case 0xEE: // XOR A, <n8>  b2 c8 flagz:Z000
+                   n8 = rom[PC + 1];
+                   if (debug) printf("XOR A, 0x%02X\n", n8);
+                   A = A ^ n8;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 2;
+                   return 8;
         case 0xF0: // LDH A, <a8>  c=12 b=2 flags=none
-            a8 = rom[PC + 1];
-            A = rom[0xFF00 + a8];
-            if (debug) printf("LDH A, 0x%04X\n", (0xFF00 + a8));
-            PC += 2;
-            return 12;
+                   a8 = rom[PC + 1];
+                   A = rom[0xFF00 + a8];
+                   if (debug) printf("LDH A, 0x%04X\n", (0xFF00 + a8));
+                   PC += 2;
+                   return 12;
         case 0xF1: // POP AF b- 1 c=12 flags none
-            {}
-            uint8_t low2 = rom[SP];
-            uint8_t high2 = rom[SP + 1];
-            SP += 2;
-            F = low2;
-            A = high2;
-            PC += 1;
-            return 12;
+                   {}
+                   uint8_t low2 = rom[SP];
+                   uint8_t high2 = rom[SP + 1];
+                   SP += 2;
+                   F = low2;
+                   A = high2;
+                   PC += 1;
+                   return 12;
         case 0xF3: // DI  b=1 c=4 flags=none 
-            if (debug) printf("DI\n");
-            //TODO: disable interrupts by clearing IME flag (?)
-            PC += 1;
-            return 4;
+                   if (debug) printf("DI\n");
+                   //TODO: disable interrupts by clearing IME flag (?)
+                   PC += 1;
+                   return 4;
         case 0xF5: // PUSH HL  b=1 c=16 flags=none
-            if (debug) printf("PUSH AF\n");
-            SP -= 2;
-            mem_write16(SP, AF);
-            PC += 1;
-            return 16;
+                   if (debug) printf("PUSH AF\n");
+                   SP -= 2;
+                   mem_write16(SP, AF);
+                   PC += 1;
+                   return 16;
         case 0xFA:  //LD A, [<a16>] b=3 c=16 flags=none
-            a16 = rom[PC + 1] | (rom[PC + 2] << 8);
-            if (debug) printf("LD A, [0x%04X]\n", a16);
-            A = rom[a16];
-            PC += 3;
-            return 16;
+                   a16 = rom[PC + 1] | (rom[PC + 2] << 8);
+                   if (debug) printf("LD A, [0x%04X]\n", a16);
+                   A = rom[a16];
+                   PC += 3;
+                   return 16;
         case 0xFE: // CP A, <n8>  c=8, b=2 flags=Z=Z, N=1, H=H, C=C
-            n8 = rom[PC + 1];
-            if (n8 == A) SETF_Z; else CLRF_Z;
-            SETF_N;
-            if ((n8 & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
-            if (n8 > A) SETF_C; else CLRF_C;
-            PC += 2;
-            return 8;
+                   n8 = rom[PC + 1];
+                   if (n8 == A) SETF_Z; else CLRF_Z;
+                   SETF_N;
+                   if ((n8 & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+                   if (n8 > A) SETF_C; else CLRF_C;
+                   PC += 2;
+                   return 8;
         case 0xFF: // RST $38  c=16 b=1 flags=none
-            if (debug) printf("RST $38\n");
-            SP -= 2;
-            mem_write16(SP, PC + 1); 
-            PC = 0x0038;
-            return 16;
+                   if (debug) printf("RST $38\n");
+                   SP -= 2;
+                   mem_write16(SP, PC + 1); 
+                   PC = 0x0038;
+                   return 16;
         default:
-            if (debug) printf("<UNKNOWN 0x%02X>\n", op);
-            exit(1);
+                   if (debug) printf("<UNKNOWN 0x%02X>\n", op);
+                   exit(1);
     }
 }
 
@@ -708,103 +948,97 @@ void dec_reg16(uint8_t *low, uint8_t *high) {
 uint8_t val_char = 0;
 void mem_write8(uint16_t addr, uint8_t b) {
     if (debug) printf("Writing to ");
-   if (addr < 0x4000) {
-     if (debug)   printf("ROM bank 0 (ignored)\n");
-   } else if (addr < 0x8000) {
-       if (debug) printf("ROM bank 1 (ignored)\n");
-   } else if (addr < 0xA000) {
-       if (debug) printf("8 KiB Video RAM (VRAM)\n");
-       rom[addr] = b;
-   } else if (addr < 0xC000) {
-       if (debug) printf("8 KiB External RAM\n");
-       rom[addr] = b;
-   } else if (addr < 0xE000) {
-       if (debug) if (debug) printf("4 KiB Work RAM (WRAM)\n");
-       rom[addr] = b;
-   } else if (addr < 0xFE00) {
-       if (debug) printf("Echo RAM (ignored)\n");
-   } else if (addr < 0xFEA0) {
-       if (debug) printf("Object attribute memory (OAM)\n");
-       rom[addr] = b;
-   } else if (addr < 0xFF00) {
-       if (debug) printf("Not Usable (ignored)\n");
-       } else if (addr < 0xFF80) {
-    if( addr == 0xFF01) {
-       val_char = b;
-   printf("[SERIAL WRITE at PC=0x%04X: 0x%02X '%c']\n", PC, b, (b >= 32 && b < 127) ? b : '?');
+    if (addr < 0x4000) {
+        if (debug)   printf("ROM bank 0 (ignored)\n");
+    } else if (addr < 0x8000) {
+        if (debug) printf("ROM bank 1 (ignored)\n");
+    } else if (addr < 0xA000) {
+        if (debug) printf("8 KiB Video RAM (VRAM)\n");
+        rom[addr] = b;
+    } else if (addr < 0xC000) {
+        if (debug) printf("8 KiB External RAM\n");
+        rom[addr] = b;
+    } else if (addr < 0xE000) {
+        if (debug) if (debug) printf("4 KiB Work RAM (WRAM)\n");
+        rom[addr] = b;
+    } else if (addr < 0xFE00) {
+        if (debug) printf("Echo RAM (ignored)\n");
+    } else if (addr < 0xFEA0) {
+        if (debug) printf("Object attribute memory (OAM)\n");
+        rom[addr] = b;
+    } else if (addr < 0xFF00) {
+        if (debug) printf("Not Usable (ignored)\n");
+    } else if (addr < 0xFF80) {
+        if( addr == 0xFF01) {
+            val_char = b;
 
-    } else if(addr == 0xFF02 && b == 0x81) {
-        printf("[SERIAL: sending 0x%02X '%c']\n", val_char, (val_char >= 32 && val_char < 127) ? val_char : '?');
-        if (val_char >= 32 && val_char < 127) {
+        } else if(addr == 0xFF02 && b == 0x81) {
             putchar(val_char);
-        } else {
-            printf("[0x%02X]", val_char);
+            fflush(stdout);
         }
-        fflush(stdout);
+        if (debug) printf("I/O Registers\n");
+        rom[addr] = b;
+    } else if (addr < 0xFFFF) {
+        if (debug) printf("High RAM (HRAM)\n");
+        rom[addr] = b;
+    } else {
+        if (debug) printf("Interrupt Enable register (IE)\n");
+        rom[addr] = b;
     }
-    if (debug) printf("I/O Registers\n");
-    rom[addr] = b;
-   } else if (addr < 0xFFFF) {
-       if (debug) printf("High RAM (HRAM)\n");
-       rom[addr] = b;
-   } else {
-       if (debug) printf("Interrupt Enable register (IE)\n");
-       rom[addr] = b;
-   }
 }
 void mem_write16(uint16_t addr, uint16_t b) {
-   if (debug) printf("Writing to ");
-   if (addr < 0x4000) {
-       if (debug) printf("ROM bank 0 (ignored)\n");
-   } else if (addr < 0x8000) {
-       if (debug) printf("ROM bank 1 (ignored)\n");
-   } else if (addr < 0xA000) {
-      if (debug)  printf("8 KiB Video RAM (VRAM)\n");
-       rom[addr] = b & 0xFF;
-       rom[addr + 1] = (b >> 8) & 0xFF;
-   } else if (addr < 0xC000) {
-       if (debug) printf("8 KiB External RAM\n");
-       rom[addr] = b & 0xFF;
-       rom[addr + 1] = (b >> 8) & 0xFF;
-   } else if (addr < 0xE000) {
-       if (debug) printf("4 KiB Work RAM (WRAM)\n");
-       rom[addr] = b & 0xFF;
-       rom[addr + 1] = (b >> 8) & 0xFF;
-   } else if (addr < 0xFE00) {
-       if (debug) printf("Echo RAM (ignored)\n");
-   } else if (addr < 0xFEA0) {
-       if (debug) printf("Object attribute memory (OAM)\n");
-       rom[addr] = b & 0xFF;
-       rom[addr + 1] = (b >> 8) & 0xFF;
-   } else if (addr < 0xFF00) {
-      if (debug)  printf("Not Usable (ignored)\n");
-   } else if (addr < 0xFF80) {
-       if (debug) printf("I/O Registers\n");
-       rom[addr] = b & 0xFF;
-       rom[addr + 1] = (b >> 8) & 0xFF;
-   } else if (addr < 0xFFFF) {
-       if (debug) printf("High RAM (HRAM)\n");
-       rom[addr] = b & 0xFF;
-       rom[addr + 1] = (b >> 8) & 0xFF;
-   } else {
-      if (debug)  printf("Interrupt Enable register (IE)\n");
-       rom[addr] = b & 0xFF;
-       rom[addr + 1] = (b >> 8) & 0xFF;
-   }
+    if (debug) printf("Writing to ");
+    if (addr < 0x4000) {
+        if (debug) printf("ROM bank 0 (ignored)\n");
+    } else if (addr < 0x8000) {
+        if (debug) printf("ROM bank 1 (ignored)\n");
+    } else if (addr < 0xA000) {
+        if (debug)  printf("8 KiB Video RAM (VRAM)\n");
+        rom[addr] = b & 0xFF;
+        rom[addr + 1] = (b >> 8) & 0xFF;
+    } else if (addr < 0xC000) {
+        if (debug) printf("8 KiB External RAM\n");
+        rom[addr] = b & 0xFF;
+        rom[addr + 1] = (b >> 8) & 0xFF;
+    } else if (addr < 0xE000) {
+        if (debug) printf("4 KiB Work RAM (WRAM)\n");
+        rom[addr] = b & 0xFF;
+        rom[addr + 1] = (b >> 8) & 0xFF;
+    } else if (addr < 0xFE00) {
+        if (debug) printf("Echo RAM (ignored)\n");
+    } else if (addr < 0xFEA0) {
+        if (debug) printf("Object attribute memory (OAM)\n");
+        rom[addr] = b & 0xFF;
+        rom[addr + 1] = (b >> 8) & 0xFF;
+    } else if (addr < 0xFF00) {
+        if (debug)  printf("Not Usable (ignored)\n");
+    } else if (addr < 0xFF80) {
+        if (debug) printf("I/O Registers\n");
+        rom[addr] = b & 0xFF;
+        rom[addr + 1] = (b >> 8) & 0xFF;
+    } else if (addr < 0xFFFF) {
+        if (debug) printf("High RAM (HRAM)\n");
+        rom[addr] = b & 0xFF;
+        rom[addr + 1] = (b >> 8) & 0xFF;
+    } else {
+        if (debug)  printf("Interrupt Enable register (IE)\n");
+        rom[addr] = b & 0xFF;
+        rom[addr + 1] = (b >> 8) & 0xFF;
+    }
 }
 void show_registers() {
-   printf("\tA=0x%02X\n", A); 
-   printf("\tBC=0x%04X\n", BC); 
-   printf("\tDE=0x%04X\n", DE); 
-   printf("\tHL=0x%04X\n", HL); 
-   printf("\tSP=0x%04X\n", SP); 
-   printf("\tPC=0x%04X\n", PC); 
-   printf("\t");
-   if ((F & 0b10000000) != 0) printf("Z:1 "); else printf("Z:0 ");
-   if ((F & 0b01000000) != 0) printf("N:1 "); else printf("N:0 ");
-   if ((F & 0b00100000) != 0) printf("H:1 "); else printf("H:0 ");
-   if ((F & 0b00010000) != 0) printf("C:1 "); else printf("C:0 ");
-   printf("\n\n");
+    printf("\tA=0x%02X\n", A); 
+    printf("\tBC=0x%04X\n", BC); 
+    printf("\tDE=0x%04X\n", DE); 
+    printf("\tHL=0x%04X\n", HL); 
+    printf("\tSP=0x%04X\n", SP); 
+    printf("\tPC=0x%04X\n", PC); 
+    printf("\t");
+    if ((F & 0b10000000) != 0) printf("Z:1 "); else printf("Z:0 ");
+    if ((F & 0b01000000) != 0) printf("N:1 "); else printf("N:0 ");
+    if ((F & 0b00100000) != 0) printf("H:1 "); else printf("H:0 ");
+    if ((F & 0b00010000) != 0) printf("C:1 "); else printf("C:0 ");
+    printf("\n\n");
 }
 
 // cartridge header 0x0100 - 0x014F
