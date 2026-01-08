@@ -13,19 +13,19 @@
 // z - zero flag (7th bit)
 #define SETF_Z F = (F | 0b10000000)
 #define CLRF_Z F = (F & 0b01111111)
-#define READF_Z (F & 0b10000000)
+#define READF_Z ((F & 0b10000000) != 0)
 // n - subtraction flag (BCD) (6th bit)
 #define SETF_N F = (F | 0b01000000)
 #define CLRF_N F = (F & 0b10111111)
-#define READF_N (F & 0b01000000)
+#define READF_N ((F & 0b01000000) != 0)
 // h - half-carry flag (BCD) (5th bit)
 #define SETF_H F = (F | 0b00100000)
 #define CLRF_H F = (F & 0b11011111)
-#define READF_H (F & 0b00100000)
+#define READF_H ((F & 0b00100000) != 0)
 // c - carry flag (4th bit)
 #define SETF_C F = (F | 0b00010000)
 #define CLRF_C F = (F & 0b11101111)
-#define READF_C (F & 0b00010000)
+#define READF_C ((F & 0b00010000) != 0)
 
 int cpu_step(void);
 int ppu_step(int cycles);
@@ -349,7 +349,7 @@ int cpu_step(void) {
             return 4;
         case 0x1F: // RRA    b1 c4 flags:000C
             if (debug) printf("RRA\n");
-            bool oldCarry = (READF_C != 0);  // Save old carry FIRST
+            bool oldCarry = READF_C;  // Save old carry FIRST
             if (A & 0x01) SETF_C; else CLRF_C;  // Bit 0 -> new carry
             A = (A >> 1);
             if (oldCarry) A |= 0x80;  // Old carry -> bit 7
@@ -360,7 +360,7 @@ int cpu_step(void) {
             e8 = (int8_t)rom[PC + 1];
             if (debug) printf("JR NZ, 0x%02X\n", e8);
             PC += 2;
-            if (READF_Z == 0) {
+            if (!READF_Z) {
                 PC += e8;
                 return 12;
             } else {
@@ -435,7 +435,7 @@ int cpu_step(void) {
             e8 = (int8_t)rom[PC + 1];
             if (debug) printf("JR Z, 0x%02X\n", e8);
             PC += 2;
-            if (READF_Z != 0) {
+            if (READF_Z) {
                 PC += e8;
                 return 12;
             } else {
@@ -493,7 +493,7 @@ int cpu_step(void) {
             e8 = (int8_t)rom[PC + 1];
             if (debug) printf("JR NC, 0x%04X\n", PC + 2 + e8);
             PC += 2;
-            if (READF_C == 0) {
+            if (!READF_C) {
                 PC += e8;
                 return 12;
             }
@@ -533,7 +533,7 @@ int cpu_step(void) {
             e8 = (int8_t)rom[PC + 1];
             if (debug) printf("JR C, 0x%02X\n", e8);
             PC += 2;
-            if (READF_C != 0) {
+            if (READF_C) {
                 PC += e8;
                 return 12;
             } 
@@ -846,7 +846,7 @@ int cpu_step(void) {
         case 0xC2: //JP NZ <a16>   b3 c[16,12] flags=none
             a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
             if (debug) printf("JP NZ 0x%04X", a16);
-            if (READF_Z == 0) {
+            if (!READF_Z) {
                 PC = a16;
                 return 16;
             }
@@ -860,7 +860,7 @@ int cpu_step(void) {
         case 0xC4: // CALL NZ, <a16>   cycles:[24,12] b=3 flags=none
             a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
             if (debug) printf("CALL NZ, 0x%04X\n", a16);
-            if (READF_Z != 0) {
+            if (READF_Z) {
                 SP -= 2;
                 mem_write16(SP, PC + 3);
                 PC = a16;
@@ -886,7 +886,7 @@ int cpu_step(void) {
             return 8;
         case 0xC8: //RET Z b=1 c[20, 8] flags=none
             if (debug) printf("RET Z\n");
-            if (READF_Z != 0) {
+            if (READF_Z) {
                 uint8_t low5 = rom[SP];
                 uint8_t high5 = rom[SP + 1];
                 SP += 2;
@@ -906,7 +906,7 @@ int cpu_step(void) {
         case 0xCA: //JP Z <a16>   b3 c[16,12] flags=none
             a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
             if (debug) printf("JP Z 0x%04X", a16);
-            if (READF_Z != 0) {
+            if (READF_Z) {
                 PC = a16;
                 return 16;
             }
@@ -953,7 +953,7 @@ int cpu_step(void) {
                                case 2: // RL
                                    if (debug) printf("RL\n");
                                    {
-                                       uint8_t old_carry = (READF_C != 0) ? 1 : 0;
+                                       uint8_t old_carry = (READF_C) ? 1 : 0;
                                        if (*reg & 0x80) SETF_C; else CLRF_C;
                                        *reg = (*reg << 1) | old_carry;
                                    }
@@ -963,7 +963,7 @@ int cpu_step(void) {
                                case 3: // RR
                                    if (debug) printf("RR\n");
                                    {
-                                       uint8_t old_carry = (READF_C != 0) ? 0x80 : 0;
+                                       uint8_t old_carry = (READF_C) ? 0x80 : 0;
                                        if (*reg & 0x01) SETF_C; else CLRF_C;
                                        *reg = (*reg >> 1) | old_carry;
                                    }
@@ -1038,7 +1038,7 @@ int cpu_step(void) {
         case 0xCE: { // ADC A, <n8>  b=2, c=8, flags=Z0HC
                        n8 = rom[PC + 1];
                        if (debug) printf("ADC A, 0x%02X\n", n8);
-                       uint8_t carry = (READF_C != 0) ? 1 : 0;
+                       uint8_t carry = (READF_C) ? 1 : 0;
                        uint16_t result = A + n8 + carry;
                        if (((A & 0x0F) + (n8 & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
                        if (result > 0xFF) SETF_C; else CLRF_C;
@@ -1050,7 +1050,7 @@ int cpu_step(void) {
                    }
         case 0xD0: //RET NC b=1 c[20, 8] flags=none
                    if (debug) printf("RET NC\n");
-                   if (READF_C == 0) {
+                   if (!READF_C) {
                        uint8_t low4 = rom[SP];
                        uint8_t high4 = rom[SP + 1];
                        SP += 2;
@@ -1084,7 +1084,7 @@ int cpu_step(void) {
                    return 8;
         case 0xD8: //RET C b=1 c[20, 8] flags=none
                    if (debug) printf("RET C\n");
-                   if (READF_C != 0) {
+                   if (READF_C) {
                        uint8_t low5 = rom[SP];
                        uint8_t high5 = rom[SP + 1];
                        SP += 2;
