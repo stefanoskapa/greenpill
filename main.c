@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 
+
 #define AF  ((F & 0xF0) | (A << 8))
 #define BC  (C | (B << 8))
 #define DE  (E | (D << 8))
@@ -38,7 +39,20 @@ void inc_reg16(uint8_t *low, uint8_t *high);
 void timer_step(int cycles);
 void handle_interrupts(void);
 
+uint32_t framebuffer[160 * 144];
+SDL_Window *window;
+SDL_Renderer *renderer;
+SDL_Texture *texture;
+
+uint32_t palette[4] = {
+    0xFFE0F8D0,  // Lightest (color 0) - white/light green
+    0xFF88C070,  // Light (color 1)
+    0xFF346856,  // Dark (color 2)
+    0xFF081820   // Darkest (color 3) - black/dark green
+};
+bool scanline_rendered = false;
 bool debug = false;
+bool frame_presented = false;
 uint8_t rom[2000000];
 
 bool IME = false;           // Interrupt Master Enable flag (write only) IME is unset (interrupts are disabled) when the game starts running.
@@ -52,12 +66,19 @@ uint8_t D = 0; // DE high
 uint8_t E = 0; // DE low
 uint8_t H = 0; // HL high
 uint8_t L = 0; // HL low
-
 uint16_t SP = 0;
 uint16_t PC = 0x0100;
 
+//The LCDC register (0xFF40) controls this:
+// LCDC bit 3: Background map tile selection
+//              0 = use $9800-$9BFF
+//              1 = use $9C00-$9FFF
+// LCDC bit 6: Window map tile selection (same as above)
+uint8_t *LCDC = &rom[0xFF40];
 int ppu_dots = 0;
-uint8_t *ppu_ly = &rom[0xFF44]; //0xFF44h 
+// LCD Y coordinate (read-only)
+//  LY can hold any value from 0 to 153, with values from 144 to 153 indicating the VBlank period.
+uint8_t *LY = &rom[0xFF44];
 
 int main(int argc, char **argv) {
 
@@ -83,18 +104,21 @@ int main(int argc, char **argv) {
 
     uint16_t cycles = 0;
 
-    /*
-       SDL_Init(SDL_INIT_VIDEO);
-       SDL_Window *window = SDL_CreateWindow(
-       "GB Emulator",
-       SDL_WINDOWPOS_CENTERED,
-       SDL_WINDOWPOS_CENTERED,
-       160 * 3, 144 * 3,
-       SDL_WINDOW_SHOWN
-       f);
-
-       SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, 0);
-       */
+      SDL_Init(SDL_INIT_VIDEO);
+window = SDL_CreateWindow(
+    "GB Emulator",
+    SDL_WINDOWPOS_CENTERED,
+    SDL_WINDOWPOS_CENTERED,
+    160 * 3, 144 * 3,
+    SDL_WINDOW_SHOWN
+);
+renderer = SDL_CreateRenderer(window, -1, 0);
+texture = SDL_CreateTexture(
+    renderer,
+    SDL_PIXELFORMAT_ARGB8888,
+    SDL_TEXTUREACCESS_STREAMING,
+    160, 144
+); 
 
     while (true) {
 
@@ -107,6 +131,7 @@ int main(int argc, char **argv) {
         }
 
         ppu_step(cycles);
+        //for (int zzz = 0; zzz < 200000; zzz++) {}
     }
 
     return EXIT_SUCCESS;
@@ -125,34 +150,67 @@ int main(int argc, char **argv) {
 // Mode order: 2 -> 3 -> 0 (loop until frame complete) -> 1 
 int ppu_step(int cycles) {
     ppu_dots += cycles;
-
+    
     if (ppu_dots >= 456) {
         ppu_dots -= 456;
-        if (*ppu_ly < 144) {
-            //render scanline (accumulate into a buffer)
-        }
-        (*ppu_ly)++;
-
-        if (*ppu_ly == 144) {
-            //show frame
-        }
-        if (*ppu_ly > 153) {
-            *ppu_ly = 0;
+        (*LY)++;
+        scanline_rendered = false;
+        
+        if (*LY > 153) {
+            *LY = 0;
+            frame_presented = false;
         }
     }
-    if (*ppu_ly >= 144) {
-        //VBlank mode (mode 1)
+
+    if (*LY >= 144) {
+        // VBlank mode (mode 1)
+        if (!frame_presented) {
+            frame_presented = true;
+            rom[0xFF0F] |= 0x01;  // Request VBlank interrupt
+            SDL_UpdateTexture(texture, NULL, framebuffer, 160 * sizeof(uint32_t));
+            SDL_RenderCopy(renderer, texture, NULL, NULL);
+            SDL_RenderPresent(renderer);
+        }
     } else if (ppu_dots <= 80) {
         // OAM scan (mode 2)
     } else if (ppu_dots <= 80 + 172) {
-        // drawing (mode 3) 
+        // Drawing (mode 3)
+        if (!scanline_rendered) {
+            scanline_rendered = true;
+            
+            uint16_t bg_tilemap_addr;
+            if ((*LCDC & 0b00001000) == 0) {
+                bg_tilemap_addr = 0x9800;
+            } else {
+                bg_tilemap_addr = 0x9C00;
+            }
+            
+            int x = 0;
+            int tile_row = *LY / 8;
+            int row_in_tile = *LY % 8;
+            
+            for (int i = 0; i < 20; i++) {
+                uint8_t index = rom[bg_tilemap_addr + (tile_row * 32) + i];
+                uint16_t tile_addr = 0x8000 + (index * 16);
+                
+                uint8_t pixels_a = rom[tile_addr + (row_in_tile * 2)];
+                uint8_t pixels_b = rom[tile_addr + (row_in_tile * 2) + 1];
+                
+                for (int bit = 7; bit >= 0; bit--) {
+                    int lo = (pixels_a >> bit) & 1;
+                    int hi = (pixels_b >> bit) & 1;
+                    int color_index = (hi << 1) | lo;
+                    framebuffer[*LY * 160 + x] = palette[color_index];
+                    x++;
+                }
+            }
+        }
     } else {
         // HBlank (mode 0)
     }
-
+    
     return 0;
 }
-
 int cpu_step(void) {
 
     uint8_t n8 = 0;   // 8-bit integer signed or unsigned
@@ -929,7 +987,7 @@ int cpu_step(void) {
                 } else {
                     // IME not set, interrupt pending: HALT bug - don't increment PC
                     // Next byte will be read twice
-                    PC += 0;  // Don't increment - this is the HALT bug
+                    PC += 1;  // Don't increment - this is the HALT bug
                 }
             }
             return 4;
@@ -2615,3 +2673,8 @@ void handle_interrupts(void) {
                 if (debug) printf("<Joypad Interrupt>\n");
             }
 }
+// Source - https://stackoverflow.com/a
+// Posted by caf, modified by community. See post 'Timeline' for change history
+// Retrieved 2026-01-09, License - CC BY-SA 4.0
+
+
