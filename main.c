@@ -622,6 +622,12 @@ int cpu_step(void) {
             if (debug) printf("LD A, 0x%02X\n", rom[PC + 1]);
             PC += 2;
             return 8;
+        case 0x37: // SCF    b1 c4 flags:-001
+            if (debug) printf("SCF\n");
+            CLRF_N; CLRF_H;
+            SETF_C;
+            PC += 1;
+            return 4;
         case 0x40: // LD B, B    b1, c4 flags:----
             if (debug) printf("LD B, B\n"); //essentially a NOP
             PC += 1;
