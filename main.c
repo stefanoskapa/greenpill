@@ -36,22 +36,19 @@ void mem_write16(uint16_t addr, uint16_t b);
 void dec_reg16(uint8_t *low, uint8_t *high);
 void inc_reg16(uint8_t *low, uint8_t *high);
 void timer_step(int cycles);
+
 bool debug = false;
 uint8_t rom[2000000];
 
 bool IME = false;           // Interrupt Master Enable flag (write only) IME is unset (interrupts are disabled) when the game starts running.
-                            // (not memory mapped)
 bool ime_scheduled = false; 
 
 uint8_t A = 0;  // A
 uint8_t F = 0; // Flags register (can't be accesed directly)
-
 uint8_t B = 0; //BC high
 uint8_t C = 0; //BC low
-
 uint8_t D = 0; // DE high
 uint8_t E = 0; // DE low
-
 uint8_t H = 0; // HL high
 uint8_t L = 0; // HL low
 
@@ -60,7 +57,7 @@ uint16_t PC = 0x0100;
 
 int ppu_dots = 0;
 uint8_t *ppu_ly = &rom[0xFF44]; //0xFF44h 
-                                //int ppu_scanline = 0;
+
 int main(int argc, char **argv) {
 
     if (argc < 2) {
@@ -612,67 +609,67 @@ int cpu_step(void) {
             E = A;
             PC += 1;
             return 4;
-        case 0x5E: // LD E, [HL] b1 c8 flags=none
+        case 0x5E: // LD E, [HL]    b1 c8 flags:----
             if (debug) printf("LD E, [HL]\n");
             E = rom[HL];
             PC += 1;
             return 8;
-        case 0x5F: //LD E, A b1 c4
+        case 0x5F: // LD E, A b1 c4 flags:----
             if (debug) printf("LD E, A\n");
             E = A;
             PC += 1;
             return 4;
-        case 0x62: // LD H, D b = 1, c=4, flags=none
+        case 0x62: // LD H, D    b1 c4 flags:----
             if (debug) printf("LD H, D\n");
             H = D;
             PC += 1;
             return 4;
-        case 0x66: //LD H, [HL] b1 c8 flags=none
+        case 0x66: // LD H, [HL]    b1 c8 flags:----
             if (debug) printf("LD H, [HL]\n");
             H = rom[HL];
             PC += 1;
             return 8;
-        case 0x67: //LD H, A  c=4 b=1 flags=none
+        case 0x67: // LD H, A    b1 c4 flags:----
             if (debug) printf("LD H, A\n");
             H = A;
             PC += 1;
             return 4;
-        case 0x6B: // LD L, E b = 1, c=4, flags=none
+        case 0x6B: // LD L, E    b1 c4 flags:----
             if (debug) printf("LD L, E\n");
             L = E;
             PC += 1;
             return 4;
-        case 0x6E: //LD L, [HL] b1 c8 flags=none
+        case 0x6E: // LD L, [HL]    b1 c8 flags:----
             if (debug) printf("LD L, [HL]\n");
             L = rom[HL];
             PC += 1;
             return 8;
-        case 0x6F: //LD L, A  c=4 b=1 flags=none
+        case 0x6F: // LD L, A  b1 c4 flags:----
             if (debug) printf("LD L, A\n");
             L = A;
             PC += 1;
             return 8;
-        case 0x70: // LD [HL], B   c=8, b=1 flags=none
+        case 0x70: // LD [HL], B    b1 c8 flags:----
             if (debug) printf("LD [HL], B\n");
             mem_write8(L | (H << 8), B); 
             PC += 1;
             return 8;
-        case 0x71: // LD [HL], C   c=8, b=1 flags=none
+        case 0x71: // LD [HL], C    b1 c8 flags:----
             if (debug) printf("LD [HL], C\n");
             mem_write8(L | (H << 8), C); 
             PC += 1;
             return 8;
-        case 0x72: // LD [HL], D   c=8, b=1 flags=none
+        case 0x72: // LD [HL], D    b1 c8 flags:----
             if (debug) printf("LD [HL], D\n");
             mem_write8(L | (H << 8), D); 
             PC += 1;
             return 8;
-        case 0x73: // LD [HL], E   c=8, b=1 flags=none
+        case 0x73: // LD [HL], E   b1 c8 flags:----
             if (debug) printf("LD [HL], E\n");
             mem_write8(L | (H << 8), E); 
             PC += 1;
             return 8;
-        case 0x76: // HALT  b=1 c=4 flags=none
+        case 0x76: // HALT    b1 c4 flags:----
             if (debug) printf("HALT\n");
             {
                 uint8_t IE = rom[0xFFFF];
@@ -703,68 +700,68 @@ int cpu_step(void) {
                 }
             }
             return 4;
-        case 0x77: // LD [HL], A   c=8, b=1 flags=none
+        case 0x77: // LD [HL], A    b1 c8 flags:----
             if (debug) printf("LD [HL], A\n");
             mem_write8(L | (H << 8), A); 
             PC += 1;
             return 8;
-        case 0x78: //LD A, B  b=1, c=4 flags=none
+        case 0x78: // LD A, B    b1 c4 flags:----
             if (debug) printf("LD A, B\n");
             A = B;
             PC += 1;
             return 4;
-        case 0x79: //LD A, C  b=1, c=4 flags=none
+        case 0x79: // LD A, C    b1 c4 flags:----
             if (debug) printf("LD A, C\n");
             A = C;
             PC += 1;
             return 4;
-        case 0x7A: //LD A, D  b=1, c=4 flags=none
+        case 0x7A: // LD A, D    b1 c4 flags:----
             if (debug) printf("LD A, D\n");
             A = D;
             PC += 1;
             return 4;
-        case 0x7B: //LD A, E  b=1, c=4 flags=none
+        case 0x7B: // LD A, E    b1 c4 flags:----
             if (debug) printf("LD A, E\n");
             A = E;
             PC += 1;
             return 4;
-        case 0x7C: // LD A, H b = 1, c=4, flags=none
+        case 0x7C: // LD A, H    b1 c4 flags:----
             if (debug) printf("LD A, H\n");
             A = H;
             PC += 1;
             return 4;
-        case 0x7D: // LD A, L b = 1, c=4, flags=none
+        case 0x7D: // LD A, L    b1 c4 flags:----
             if (debug) printf("LD A, L\n");
             A = L;
             PC += 1;
             return 4;
-        case 0x7E: //LD A, [HL] b=1 c=8 flags=none
+        case 0x7E: // LD A, [HL]    b1 c8 flags:----
             if (debug) printf("LD A, [HL]\n");
             A = rom[HL];
             PC += 1;
             return 8;
-        case 0xA9: // XOR A, C b=1 c=4 flags=Z000
+        case 0xA9: // XOR A, C    b1 c4 flags:Z000
             if (debug) printf("XOR A, C\n");
             A = A ^ C;
             if (A == 0) SETF_Z; else CLRF_Z;
             CLRF_N; CLRF_H; CLRF_C;
             PC += 1;
             return 4;
-        case 0xAD: // XOR A, L b=1 c=4 flags=Z000
+        case 0xAD: // XOR A, L    b1 c4 flags:Z000
             if (debug) printf("XOR A, L\n");
             A = A ^ L;
             if (A == 0) SETF_Z; else CLRF_Z;
             CLRF_N; CLRF_H; CLRF_C;
             PC += 1;
             return 4;
-        case 0xAE: //XOR A, [HL] b1 c8 flags Z000
+        case 0xAE: // XOR A, [HL]    b1 c8 flags:Z000
             if (debug) printf("XOR A, [HL]\n");
             A = A ^ rom[HL];
             if (A == 0) SETF_Z; else CLRF_Z;
             CLRF_N; CLRF_H; CLRF_C;
             PC += 1;
             return 8;
-        case 0xAF: // XOR A, A   c=4, b=1, flags=z
+        case 0xAF: // XOR A, A    b1 c4 flags:1000
             A = 0;
             SETF_Z;
             CLRF_N;
@@ -773,7 +770,7 @@ int cpu_step(void) {
             if (debug) printf("XOR A, A\n");
             PC += 1;
             return 4;
-        case 0xB0: // OR A, B
+        case 0xB0: // OR A, B   b1 c4 flags:Z000
             if (debug) printf("OR A, B\n");
             A = A | B;
             if (A == 0) SETF_Z; else CLRF_Z;
@@ -782,7 +779,7 @@ int cpu_step(void) {
             CLRF_C;
             PC += 1;
             return 4;
-        case 0xB1: // OR A, C
+        case 0xB1: // OR A, C    b1 c4 flags:Z000
             if (debug) printf("OR A, C\n");
             A = A | C;
             if (A == 0) SETF_Z; else CLRF_Z;
@@ -791,21 +788,20 @@ int cpu_step(void) {
             CLRF_C;
             PC += 1;
             return 4;
-        case 0xB6: // OR A, [HL] b=1 c=8 flags Z000
+        case 0xB6: // OR A, [HL]    b1 c8 flags:Z000
             if (debug) printf("OR A, [HL]\n");
             A = A | rom[HL];
             if (A == 0) SETF_Z; else CLRF_Z;
             CLRF_N; CLRF_H; CLRF_C;
             PC += 1;
             return 8;
-        case 0xB7: // OR A, A
-                   //
+        case 0xB7: // OR A, A    b1 c4 flags:Z000
             if (debug) printf("OR A, A\n");
             if (A == 0) SETF_Z; else CLRF_Z;
             CLRF_N; CLRF_H; CLRF_C;
             PC += 1;
             return 4;
-        case 0xB8: // CP A, B  c=4, b=1 flags=Z=Z, N=1, H=H, C=C
+        case 0xB8: // CP A, B    b1 c4 flags:Z1HC
             if (debug) printf("CP A, B\n");
             if (A == B) SETF_Z; else CLRF_Z;
             SETF_N;
@@ -813,7 +809,7 @@ int cpu_step(void) {
             if (A < B) SETF_C; else CLRF_C;
             PC += 1;
             return 4;
-        case 0xB9: // CP A, C  c=4, b=1 flags=Z=Z, N=1, H=H, C=C
+        case 0xB9: // CP A, C    b1 c4 flags:Z1HC
             if (debug) printf("CP A, C\n");
             if (A == C) SETF_Z; else CLRF_Z;
             SETF_N;
@@ -821,7 +817,7 @@ int cpu_step(void) {
             if (A < C) SETF_C; else CLRF_C;
             PC += 1;
             return 4;
-        case 0xBA: // CP A, D  c=4, b=1 flags=Z=Z, N=1, H=H, C=C
+        case 0xBA: // CP A, D    b1 c4 flags:Z1HC
             if (debug) printf("CP A, D\n");
             if (A == D) SETF_Z; else CLRF_Z;
             SETF_N;
@@ -829,7 +825,7 @@ int cpu_step(void) {
             if (A < D) SETF_C; else CLRF_C;
             PC += 1;
             return 4;
-        case 0xBB: // CP A, E  c=4, b=1 flags=Z=Z, N=1, H=H, C=C
+        case 0xBB: // CP A, E    b1 c4 flags:Z1HC
             if (debug) printf("CP A, E\n");
             if (A == E) SETF_Z; else CLRF_Z;
             SETF_N;
@@ -837,13 +833,13 @@ int cpu_step(void) {
             if (A < E) SETF_C; else CLRF_C;
             PC += 1;
             return 4;
-        case 0xC1: // POP BC b= 1 c=12 flags none
+        case 0xC1: // POP BC    b1 c12 flags:----
             C = rom[SP];
             B = rom[SP + 1];
             SP += 2;
             PC += 1;
             return 12;
-        case 0xC2: //JP NZ <a16>   b3 c[16,12] flags=none
+        case 0xC2: // JP NZ <a16>    b3 c16,12 flags:----
             a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
             if (debug) printf("JP NZ 0x%04X", a16);
             if (!READF_Z) {
@@ -852,12 +848,12 @@ int cpu_step(void) {
             }
             PC += 3;
             return 12;
-        case 0xC3: // JP <a16>      c=16, b=3
+        case 0xC3: // JP <a16>    b3 c16 flags:----
             a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
             if (debug) printf("JP 0x%04X\n", a16);
             PC = a16; 
             return 16;
-        case 0xC4: // CALL NZ, <a16>   cycles:[24,12] b=3 flags=none
+        case 0xC4: // CALL NZ, <a16>    b3 c24,12 flags:----
             a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
             if (debug) printf("CALL NZ, 0x%04X\n", a16);
             if (READF_Z) {
@@ -868,13 +864,13 @@ int cpu_step(void) {
             }
             PC += 3;
             return 12;
-        case 0xC5: // PUSH BC b=1 c=16 flags=none
+        case 0xC5: // PUSH BC b1 c16 flags:----
             if (debug) printf("PUSH BC\n");
             SP -= 2;
             mem_write16(SP, BC);
             PC += 1;
             return 16;
-        case 0xC6: //ADD A, <n8>   b=2 c=8, flags=Z0HC
+        case 0xC6: // ADD A, <n8>    b2 c8 flags:Z0HC
             n8 = rom[PC + 1];
             if (debug) printf("ADD A, 0x%02X\n", n8);
             if (A + n8 > 0xFF) SETF_C; else CLRF_C;
@@ -884,7 +880,7 @@ int cpu_step(void) {
             CLRF_N;
             PC += 2;
             return 8;
-        case 0xC8: //RET Z b=1 c[20, 8] flags=none
+        case 0xC8: // RET Z b1 c20, 8 flags:----
             if (debug) printf("RET Z\n");
             if (READF_Z) {
                 uint8_t low5 = rom[SP];
@@ -895,7 +891,7 @@ int cpu_step(void) {
             }
             PC += 1;
             return 8;
-        case 0xC9: //RET b=1 c=16
+        case 0xC9: // RET b1 c16 flags:----
             if (debug) printf("RET \n");
             {}
             uint8_t low = rom[SP];
@@ -903,7 +899,7 @@ int cpu_step(void) {
             SP += 2;
             PC= (high << 8) | low;
             return 16;
-        case 0xCA: //JP Z <a16>   b3 c[16,12] flags=none
+        case 0xCA: // JP Z <a16>    b3 c16,12 flags:----
             a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
             if (debug) printf("JP Z 0x%04X", a16);
             if (READF_Z) {
@@ -912,7 +908,7 @@ int cpu_step(void) {
             }
             PC += 3;
             return 12;
-        case 0xCB: { // PREFIX
+        case 0xCB: { // PREFIX b1 c4 flags:----
                        uint8_t cb_op = rom[PC + 1];
                        if (debug) printf("CB %02X: ", cb_op);
 
@@ -1028,14 +1024,14 @@ int cpu_step(void) {
                        PC += 2;
                        return cycles;
                    }
-        case 0xCD: // CALL <a16> c=24, b=3 flags=none
+        case 0xCD: // CALL <a16>    b3 c24 flags:----
                    a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
                    if (debug) printf("CALL 0x%04X\n", a16);
                    SP -= 2;
                    mem_write16(SP, PC + 3);
                    PC = a16;
                    return 24;
-        case 0xCE: { // ADC A, <n8>  b=2, c=8, flags=Z0HC
+        case 0xCE: { // ADC A, <n8>    b2 c8 flags:Z0HC
                        n8 = rom[PC + 1];
                        if (debug) printf("ADC A, 0x%02X\n", n8);
                        uint8_t carry = (READF_C) ? 1 : 0;
@@ -1048,7 +1044,7 @@ int cpu_step(void) {
                        PC += 2;
                        return 8;
                    }
-        case 0xD0: //RET NC b=1 c[20, 8] flags=none
+        case 0xD0: // RET NC    b1 c20, 8 flags:----
                    if (debug) printf("RET NC\n");
                    if (!READF_C) {
                        uint8_t low4 = rom[SP];
@@ -1059,20 +1055,20 @@ int cpu_step(void) {
                    }
                    PC += 1;
                    return 8;
-        case 0xD1: // POP DE b= 1 c=12 flags none
+        case 0xD1: // POP DE    b1 c12 flags:----
                    if (debug) printf("POP DE\n");
                    E = rom[SP];
                    D = rom[SP + 1];
                    SP += 2;
                    PC += 1;
                    return 12;
-        case 0xD5: // PUSH DE b=1 c=16 flags=none
+        case 0xD5: // PUSH DE    b1 c16 flags:----
                    if (debug) printf("PUSH DE\n");
                    SP -= 2;
                    mem_write16(SP, DE);
                    PC += 1;
                    return 16;
-        case 0xD6: //SUB A, <n8> b=2 c=8 flags=Z1HC
+        case 0xD6: // SUB A, <n8>    b2 c8 flags:Z1HC
                    n8 = rom[PC + 1];
                    if (debug) printf("SUB A, 0x%02X\n", n8);
                    if (n8 > A) SETF_C; else CLRF_C;
@@ -1082,7 +1078,7 @@ int cpu_step(void) {
                    if (A == 0) SETF_Z; else CLRF_Z;
                    PC += 2;
                    return 8;
-        case 0xD8: //RET C b=1 c[20, 8] flags=none
+        case 0xD8: // RET C    b1 c20, 8 flags:----
                    if (debug) printf("RET C\n");
                    if (READF_C) {
                        uint8_t low5 = rom[SP];
@@ -1093,14 +1089,14 @@ int cpu_step(void) {
                    }
                    PC += 1;
                    return 8;
-        case 0xE0: // LDH <a8>, A c=12, b = 2 flags=none
+        case 0xE0: // LDH <a8>, A    b2 c12 flags:----
                    a8 = rom[PC + 1];
                    uint16_t addr = 0xFF00 + a8;
                    if (debug) printf("LDH 0x%04X, A\n", addr);
                    mem_write8(addr, A);
                    PC += 2;
                    return 12;
-        case 0xE1: // POP HL b- 1 c=12 flags none
+        case 0xE1: // POP HL    b1 c12 flags:----
                    {}
                    uint8_t low1 = rom[SP];
                    uint8_t high1 = rom[SP + 1];
@@ -1109,18 +1105,18 @@ int cpu_step(void) {
                    H = high1;
                    PC += 1;
                    return 12;
-        case 0xE2: //LDH [C], A  c=8, b=1
+        case 0xE2: // LDH [C], A  b1 c8 flags:----
                    if (debug) printf("LDH [C], A\n");
                    mem_write8(0xFF00 + C, A);
                    PC += 1;
                    return 8;
-        case 0xE5: // PUSH HL  b=1 c=16 flags=none
+        case 0xE5: // PUSH HL    b1 c16 flags:----
                    if (debug) printf("PUSH HL\n");
                    SP -= 2;
                    mem_write16(SP, HL);
                    PC += 1;
                    return 16;
-        case 0xE6: // AND A, <n8> b=2 c=8 flags: Z010
+        case 0xE6: // AND A, <n8>    b2 c8 flags:Z010
                    n8 = rom[PC + 1];
                    if (debug) printf("AND A, 0x%02X\n", n8);
                    A = A & n8;
@@ -1128,7 +1124,7 @@ int cpu_step(void) {
                    CLRF_N; SETF_H; CLRF_C;
                    PC += 2;
                    return 8;
-        case 0xE8: // ADD SP, <e8>   b=2 c=16, flags=00HC
+        case 0xE8: // ADD SP, <e8>    b2 c16 flags=00HC
                    e8 = (int8_t)rom[PC + 1];
                    if (debug) printf("ADD SP, 0x%02X\n", e8);
                    {
@@ -1145,17 +1141,17 @@ int cpu_step(void) {
                    }
                    PC += 2;
                    return 16;
-        case 0xE9: // JP HL b1 c4 flags=none
+        case 0xE9: // JP HL    b1 c4 flags:----
                    if (debug) printf("JP HL\n");
                    PC = HL;
                    return 4;
-        case 0xEA: //LD [a16], A  c=16 b=3 flags=none
+        case 0xEA: // LD [a16], A    b3 c16 flags:----
                    a16 = rom[PC + 1] | (rom[PC + 2] << 8);
                    if (debug) printf("LD 0x%04X, A\n", a16);
                    mem_write8(a16, A);
                    PC += 3;
                    return 16;
-        case 0xEE: // XOR A, <n8>  b2 c8 flagz:Z000
+        case 0xEE: // XOR A, <n8>    b2 c8 flags:Z000
                    n8 = rom[PC + 1];
                    if (debug) printf("XOR A, 0x%02X\n", n8);
                    A = A ^ n8;
@@ -1163,13 +1159,13 @@ int cpu_step(void) {
                    CLRF_N; CLRF_H; CLRF_C;
                    PC += 2;
                    return 8;
-        case 0xF0: // LDH A, <a8>  c=12 b=2 flags=none
+        case 0xF0: // LDH A, <a8>    b2 c12 flags:----
                    a8 = rom[PC + 1];
                    A = rom[0xFF00 + a8];
                    if (debug) printf("LDH A, 0x%04X\n", (0xFF00 + a8));
                    PC += 2;
                    return 12;
-        case 0xF1: // POP AF
+        case 0xF1: // POP AF    b1 c12 flags:ZNHC
                    if (debug) printf("POP AF\n");
                    {
                        uint8_t low2 = rom[SP];
@@ -1177,24 +1173,22 @@ int cpu_step(void) {
                        SP += 2;
                        F = low2 & 0xF0;
                        A = high2;
-                       //printf("After POP AF: F=0x%02X (lower nibble = 0x%X)\n", F, F & 0x0F);
                    }
                    PC += 1;
                    return 12;
-        case 0xF3: // DI  b=1 c=4 flags=none
+        case 0xF3: // DI    b1 c4 flags:----
                    if (debug) printf("DI\n");
                    IME = false;
                    ime_scheduled = false;  // Cancel any pending EI
                    PC += 1;
                    return 4;
-        case 0xF5: // PUSH AF
+        case 0xF5: // PUSH AF    b1 c16 flags:----
                    if (debug) printf("PUSH AF\n");
-                   //printf("PUSH AF: SP=0x%04X, pushing A=0x%02X, F=0x%02X\n", SP, A, F & 0xF0);
                    SP -= 2;
                    mem_write16(SP, AF);
                    PC += 1;
                    return 16;
-        case 0xF8: // LD HL, SP+e8  b=2 c=12 flags=00HC
+        case 0xF8: // LD HL, SP+e8    b2 c12 flags=00HC
                    e8 = (int8_t)rom[PC + 1];
                    if (debug) printf("LD HL, SP+0x%02X\n", e8);
                    {
@@ -1212,23 +1206,23 @@ int cpu_step(void) {
                    }
                    PC += 2;
                    return 12;
-        case 0xF9: // LD SP, HL  b1 c8
+        case 0xF9: // LD SP, HL    b1 c8 flags:----
                    if (debug) printf("LD SP, HL\n");
                    SP = HL;
                    PC += 1;
                    return 8;
-        case 0xFA:  //LD A, [<a16>] b=3 c=16 flags=none
+        case 0xFA:  //LD A, [a16]    b3 c16 flags:----
                    a16 = rom[PC + 1] | (rom[PC + 2] << 8);
                    if (debug) printf("LD A, [0x%04X]\n", a16);
                    A = rom[a16];
                    PC += 3;
                    return 16;
-        case 0xFB: // EI  b=1 c=4 flags=none
+        case 0xFB: // EI    b1 c4 flags:----
                    if (debug) printf("EI\n");
                    ime_scheduled = true;
                    PC += 1;
                    return 4;
-        case 0xFE: // CP A, <n8>  c=8, b=2 flags=Z=Z, N=1, H=H, C=C
+        case 0xFE: // CP A, <n8>    b2 c8 flags:Z1HC
                    n8 = rom[PC + 1];
                    if (n8 == A) SETF_Z; else CLRF_Z;
                    SETF_N;
@@ -1236,7 +1230,7 @@ int cpu_step(void) {
                    if (n8 > A) SETF_C; else CLRF_C;
                    PC += 2;
                    return 8;
-        case 0xFF: // RST $38  c=16 b=1 flags=none
+        case 0xFF: // RST $38    b1 c16 flags:----
                    if (debug) printf("RST $38\n");
                    SP -= 2;
                    mem_write16(SP, PC + 1); 
