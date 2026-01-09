@@ -1516,6 +1516,11 @@ int cpu_step(void) {
                    }
                    PC += 1;
                    return 12;
+        case 0xF2: // LDH A, [0xFF00 + C]    b1 c8 flags:----
+                   if (debug) printf("LDH A, [0xFF00 + C]\n");
+                   A = rom[0xFF00 + C];
+                   PC += 1;
+                   return 8;
         case 0xF3: // DI    b1 c4 flags:----
                    if (debug) printf("DI\n");
                    IME = false;
