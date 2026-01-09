@@ -259,6 +259,19 @@ int cpu_step(void) {
             rom[a16 + 1] = (SP >> 8);
             PC += 3;
             return 20;
+        case 0x09: // ADD HL, BC    b1 c8 flags:-0HC
+            if (debug) printf("ADD HL, BC\n");
+            {
+                uint16_t hl = HL;
+                uint32_t result = hl + BC;
+                if (result > 0xFFFF) SETF_C; else CLRF_C;
+                if (((hl & 0x0FFF) + (BC & 0x0FFF)) > 0x0FFF) SETF_H; else CLRF_H;
+                CLRF_N;
+                H = (result >> 8) & 0xFF;
+                L = result & 0xFF;
+            }
+            PC += 1;
+            return 8;
         case 0x0B: // DEC BC    b1 c8 flags:----
             if (debug) printf("DEC BC\n");
             dec_reg16(&C, &B);
@@ -329,9 +342,27 @@ int cpu_step(void) {
             PC += 2;
             PC += e8;
             return 12;
+        case 0x19: // ADD HL, DE    b1 c8 flags:-0HC
+            if (debug) printf("ADD HL, DE\n");
+            {
+                uint16_t hl = HL;
+                uint32_t result = hl + DE;
+                if (result > 0xFFFF) SETF_C; else CLRF_C;
+                if (((hl & 0x0FFF) + (DE & 0x0FFF)) > 0x0FFF) SETF_H; else CLRF_H;
+                CLRF_N;
+                H = (result >> 8) & 0xFF;
+                L = result & 0xFF;
+            }
+            PC += 1;
+            return 8;
         case 0x1A:  // LD A, [DE]    b1 c8 flags:----
             if (debug) printf("LD A, [DE]\n");
             A = rom[E | (D << 8)];
+            PC += 1;
+            return 8;
+        case 0x1B: // DEC DE    b1 c8 flags:----
+            if (debug) printf("DEC DE\n");
+            dec_reg16(&E, &D);
             PC += 1;
             return 8;
         case 0x1C: // INC E    b1 c4 flags:Z0H-
@@ -471,6 +502,11 @@ int cpu_step(void) {
             inc_reg16(&L, &H);
             PC += 1;
             return 8;
+        case 0x2B: // DEC HL    b1 c8 flags:----
+            if (debug) printf("DEC HL\n");
+            dec_reg16(&L, &H);
+            PC += 1;
+            return 8;
         case 0x2C:  // INC L    b1 c4 flags:Z0H- 
             if (debug) printf("INC L\n");
             if ((L & 0x0F) == 0x0F) SETF_H; else CLRF_H;
@@ -586,6 +622,35 @@ int cpu_step(void) {
             if (debug) printf("LD A, 0x%02X\n", rom[PC + 1]);
             PC += 2;
             return 8;
+        case 0x40: // LD B, B    b1, c4 flags:----
+            if (debug) printf("LD B, B\n"); //essentially a NOP
+            PC += 1;
+            return 4;
+        case 0x41: // LD B, C    b1 c4 flags:----
+            if (debug) printf("LD B, C\n");
+            B = C;
+            PC += 1;
+            return 4;
+        case 0x42: // LD B, D    b1 c4 flags:----
+            if (debug) printf("LD B, D\n");
+            B = D;
+            PC += 1;
+            return 4;
+        case 0x43: // LD B, E    b1 c4 flags:----
+            if (debug) printf("LD B, E\n");
+            B = E;
+            PC += 1;
+            return 4;
+        case 0x44: // LD B, H    b1 c4 flags:----
+            if (debug) printf("LD B, H\n");
+            B = H;
+            PC += 1;
+            return 4;
+        case 0x45: // LD B, L    b1 c4 flags:----
+            if (debug) printf("LD B, L\n");
+            B = L;
+            PC += 1;
+            return 4;
         case 0x46: // LD B, [HL]    b1 c8 flags:----
             if (debug) printf("LD B, [HL]\n");
             B = rom[HL];
@@ -594,6 +659,35 @@ int cpu_step(void) {
         case 0x47: // LD B, A    b1 c4 flags:----
             if (debug) printf("LD B, A\n");
             B = A;
+            PC += 1;
+            return 4;
+        case 0x48: // LD C, B    b1 c4 flags:----
+            if (debug) printf("LD C, B\n");
+            C = B;
+            PC += 1;
+            return 4;
+        case 0x49: // LD C, C    b1 c4 flags:----
+            if (debug) printf("LD C, C\n");
+            PC += 1;
+            return 4;
+        case 0x4A: // LD C, D    b1 c4 flags:----
+            if (debug) printf("LD C, D\n");
+            C = D;
+            PC += 1;
+            return 4;
+        case 0x4B: // LD C, E    b1 c4 flags:----
+            if (debug) printf("LD C, E\n");
+            C = E;
+            PC += 1;
+            return 4;
+        case 0x4C: // LD C, H    b1 c4 flags:----
+            if (debug) printf("LD C, H\n");
+            C = H;
+            PC += 1;
+            return 4;
+        case 0x4D: // LD C, L    b1 c4 flags:----
+            if (debug) printf("LD C, L\n");
+            C = L;
             PC += 1;
             return 4;
         case 0x4E: // LD C, [HL]    b1 c8 flags:----
@@ -606,6 +700,35 @@ int cpu_step(void) {
             C = A;
             PC += 1;
             return 4;
+        case 0x50: // LD D, B    b1 c4 flags:----
+            if (debug) printf("LD D, B\n");
+            D = B;
+            PC += 1;
+            return 4;
+        case 0x51: // LD D, C    b1 c4 flags:----
+            if (debug) printf("LD D, C\n");
+            D = C;
+            PC += 1;
+            return 4;
+        case 0x52: // LD D, D    b1 c4 flags:----
+            if (debug) printf("LD D, D\n");
+            PC += 1;
+            return 4;
+        case 0x53: // LD D, E    b1 c4 flags:----
+            if (debug) printf("LD D, E\n");
+            D = E;
+            PC += 1;
+            return 4;
+        case 0x54: // LD D, H    b1 c4 flags:----
+            if (debug) printf("LD D, H\n");
+            D = H;
+            PC += 1;
+            return 4;
+        case 0x55: // LD D, L    b1 c4 flags:----
+            if (debug) printf("LD D, L\n");
+            D = L;
+            PC += 1;
+            return 4;
         case 0x56: // LD D, [HL]    b1 c8 flags:----
             if (debug) printf("LD D, [HL]\n");
             D = rom[HL];
@@ -614,6 +737,30 @@ int cpu_step(void) {
         case 0x57: // LD D, A    b1 c4 flags:----
             if (debug) printf("LD D, A\n");
             D = A;
+            PC += 1;
+            return 4;
+        case 0x58: // LD E, B    b1 c4 flags:----
+            if (debug) printf("LD E, B\n");
+            E = B;
+            PC += 1;
+            return 4;
+        case 0x59: // LD E, C    b1 c4 flags:----
+            if (debug) printf("LD E, C\n");
+            E = C;
+            PC += 1;
+            return 4;
+        case 0x5A: // LD E, D    b1 c4 flags:----
+            if (debug) printf("LD E, D\n");
+            E = D;
+            PC += 1;
+            return 4;
+        case 0x5B: // LD E, E    b1 c4 flags:----
+            if (debug) printf("LD E, E\n");
+            PC += 1;
+            return 4;
+        case 0x5C: // LD E, H    b1 c4 flags:----
+            if (debug) printf("LD E, H\n");
+            E = H;
             PC += 1;
             return 4;
         case 0x5D: // LD E, L    b1 c4 flags:----
@@ -631,9 +778,33 @@ int cpu_step(void) {
             E = A;
             PC += 1;
             return 4;
+        case 0x60: // LD H, B    b1 c4 flags:----
+            if (debug) printf("LD H, B\n");
+            H = B;
+            PC += 1;
+            return 4;
+        case 0x61: // LD H, C    b1 c4 flags:----
+            if (debug) printf("LD H, C\n");
+            H = C;
+            PC += 1;
+            return 4;
         case 0x62: // LD H, D    b1 c4 flags:----
             if (debug) printf("LD H, D\n");
             H = D;
+            PC += 1;
+            return 4;
+        case 0x63: // LD H, E    b1 c4 flags:----
+            if (debug) printf("LD H, E\n");
+            H = E;
+            PC += 1;
+            return 4;
+        case 0x64: // LD H, H    b1 c4 flags:----
+            if (debug) printf("LD H, H\n");
+            PC += 1;
+            return 4;
+        case 0x65: // LD H, L    b1 c4 flags:----
+            if (debug) printf("LD H, L\n");
+            H = L;
             PC += 1;
             return 4;
         case 0x66: // LD H, [HL]    b1 c8 flags:----
@@ -646,9 +817,33 @@ int cpu_step(void) {
             H = A;
             PC += 1;
             return 4;
+        case 0x68: // LD L, B    b1 c4 flags:----
+            if (debug) printf("LD L, B\n");
+            L = B;
+            PC += 1;
+            return 4;
+        case 0x69: // LD L, C    b1 c4 flags:----
+            if (debug) printf("LD L, C\n");
+            L = C;
+            PC += 1;
+            return 4;
+        case 0x6A: // LD L, D    b1 c4 flags:----
+            if (debug) printf("LD L, D\n");
+            L = D;
+            PC += 1;
+            return 4;
         case 0x6B: // LD L, E    b1 c4 flags:----
             if (debug) printf("LD L, E\n");
             L = E;
+            PC += 1;
+            return 4;
+        case 0x6C: // LD L, H    b1 c4 flags:----
+            if (debug) printf("LD L, H\n");
+            L = H;
+            PC += 1;
+            return 4;
+        case 0x6D: // LD L, L    b1 c4 flags:----
+            if (debug) printf("LD L, L\n");
             PC += 1;
             return 4;
         case 0x6E: // LD L, [HL]    b1 c8 flags:----
@@ -679,6 +874,16 @@ int cpu_step(void) {
         case 0x73: // LD [HL], E   b1 c8 flags:----
             if (debug) printf("LD [HL], E\n");
             mem_write8(L | (H << 8), E); 
+            PC += 1;
+            return 8;
+        case 0x74: // LD [HL], H   b1 c8 flags:----
+            if (debug) printf("LD [HL], H\n");
+            mem_write8(L | (H << 8), H); 
+            PC += 1;
+            return 8;
+        case 0x75: // LD [HL], L   b1 c8 flags:----
+            if (debug) printf("LD [HL], L\n");
+            mem_write8(L | (H << 8), L); 
             PC += 1;
             return 8;
         case 0x76: // HALT    b1 c4 flags:----
@@ -752,6 +957,10 @@ int cpu_step(void) {
             A = rom[HL];
             PC += 1;
             return 8;
+        case 0x7F: // LD A, A    b1 c4 flags:----
+            if (debug) printf("LD A, A\n");
+            PC += 1;
+            return 4;
         case 0xA9: // XOR A, C    b1 c4 flags:Z000
             if (debug) printf("XOR A, C\n");
             A = A ^ C;
