@@ -36,6 +36,7 @@ void mem_write16(uint16_t addr, uint16_t b);
 void dec_reg16(uint8_t *low, uint8_t *high);
 void inc_reg16(uint8_t *low, uint8_t *high);
 void timer_step(int cycles);
+void handle_interrupts(void);
 
 bool debug = false;
 uint8_t rom[2000000];
@@ -94,58 +95,15 @@ int main(int argc, char **argv) {
 
        SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, 0);
        */
+
     while (true) {
 
-        cycles =  cpu_step();
-        if (debug == true) {
-            show_registers();
-        }
+        cycles = cpu_step();
 
         timer_step(cycles);
+
         if (IME == true) {
-            uint8_t IE = rom[0xFFFF]; //interrupt enable flag
-            uint8_t IF = rom[0xFF0F]; //interrupt flag
-            if ((IE & IF & 0b00000001) == 0b00000001) {
-                // VBlank
-                IME = false;
-                rom[0xFF0F] = (IF & 0b11111110);
-                SP -= 2;
-                mem_write16(SP, PC);
-                PC = 0x40;
-                if (debug) printf("<VBlank Interrupt>\n");
-            } else if ((IE & IF & 0b00000010) == 0b00000010) {
-                // LCD
-                IME = false;
-                rom[0xFF0F] = (IF & 0b11111101);
-                SP -= 2;
-                mem_write16(SP, PC);
-                PC = 0x48;
-                if (debug) printf("<STAT Interrupt>\n");
-            } else if ((IE & IF & 0b00000100) == 0b00000100) {
-                // Timer
-                IME = false;
-                rom[0xFF0F] = (IF & 0b11111011);
-                SP -= 2;
-                mem_write16(SP, PC);
-                PC = 0x50;
-                if (debug) printf("<Timer Interrupt>\n");
-            } else if ((IE & IF & 0b00001000) == 0b00001000) {
-                // serial
-                IME = false;
-                rom[0xFF0F] = (IF & 0b11110111);
-                SP -= 2;
-                mem_write16(SP, PC);
-                PC = 0x58;
-                if (debug) printf("<Serial Interrupt>\n");
-            } else if ((IE & IF & 0b00010000) == 0b00010000) {
-                //Joypad
-                IME = false;
-                rom[0xFF0F] = (IF & 0b11101111);
-                SP -= 2;
-                mem_write16(SP, PC);
-                PC = 0x60;
-                if (debug) printf("<Joypad Interrupt>\n");
-            }
+            handle_interrupts();
         }
 
         ppu_step(cycles);
@@ -2134,6 +2092,7 @@ int cpu_step(void) {
                    exit(1);
 
     }
+    if (debug) show_registers();
 }
 
 void inc_reg16(uint8_t *low, uint8_t *high) {
@@ -2608,4 +2567,51 @@ void timer_step(int cycles) {
             rom[0xFF0F] |= 0x04;  // Request timer interrupt
         }
     }
+}
+
+void handle_interrupts(void) {
+
+            uint8_t IE = rom[0xFFFF]; //interrupt enable flag
+            uint8_t IF = rom[0xFF0F]; //interrupt flag
+            if ((IE & IF & 0b00000001) == 0b00000001) {
+                // VBlank
+                IME = false;
+                rom[0xFF0F] = (IF & 0b11111110);
+                SP -= 2;
+                mem_write16(SP, PC);
+                PC = 0x40;
+                if (debug) printf("<VBlank Interrupt>\n");
+            } else if ((IE & IF & 0b00000010) == 0b00000010) {
+                // LCD
+                IME = false;
+                rom[0xFF0F] = (IF & 0b11111101);
+                SP -= 2;
+                mem_write16(SP, PC);
+                PC = 0x48;
+                if (debug) printf("<STAT Interrupt>\n");
+            } else if ((IE & IF & 0b00000100) == 0b00000100) {
+                // Timer
+                IME = false;
+                rom[0xFF0F] = (IF & 0b11111011);
+                SP -= 2;
+                mem_write16(SP, PC);
+                PC = 0x50;
+                if (debug) printf("<Timer Interrupt>\n");
+            } else if ((IE & IF & 0b00001000) == 0b00001000) {
+                // serial
+                IME = false;
+                rom[0xFF0F] = (IF & 0b11110111);
+                SP -= 2;
+                mem_write16(SP, PC);
+                PC = 0x58;
+                if (debug) printf("<Serial Interrupt>\n");
+            } else if ((IE & IF & 0b00010000) == 0b00010000) {
+                //Joypad
+                IME = false;
+                rom[0xFF0F] = (IF & 0b11101111);
+                SP -= 2;
+                mem_write16(SP, PC);
+                PC = 0x60;
+                if (debug) printf("<Joypad Interrupt>\n");
+            }
 }
