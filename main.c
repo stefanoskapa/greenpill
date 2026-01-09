@@ -317,6 +317,12 @@ int cpu_step(void) {
             if (D == 0) SETF_Z; else CLRF_Z;
             PC += 1;
             return 4;
+        case 0x16: // LD D, <n8>    b2 c8 flags:----
+            n8 = rom[PC + 1];
+            if (debug) printf("LD D, 0x%02X\n", n8);
+            D = n8;
+            PC += 2;
+            return 8;
         case 0x18: // JR <e8>    b2 c12 flags:----
             e8 = (int8_t)rom[PC + 1];
             if (debug) printf("JR 0x%04X\n", e8 + PC);
@@ -344,6 +350,12 @@ int cpu_step(void) {
             SETF_N;
             PC += 1;
             return 4;
+        case 0x1E: // LD E, <n8>    b2 c8 flags:----
+            n8 = rom[PC + 1];
+            if (debug) printf("LD E, 0x%02X\n", n8);
+            E = n8;
+            PC += 2;
+            return 8;
         case 0x1F: // RRA    b1 c4 flags:000C
             if (debug) printf("RRA\n");
             bool oldCarry = READF_C;  // Save old carry FIRST
@@ -1089,6 +1101,17 @@ int cpu_step(void) {
                    }
                    PC += 1;
                    return 8;
+        case 0xDE: // SBC A, <n8>    b2 c8 flags:Z1HC
+                   n8 = rom[PC + 1];
+                   if (debug) printf("SBC A, 0x%02X\n", n8);
+                   uint8_t carry = READF_C ? 1 : 0;
+                   if (n8 + carry > A) SETF_C; else CLRF_C;
+                   if ((n8 & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+                   A = A - n8 - carry;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   SETF_N;
+                   PC += 2;
+                   return 8;
         case 0xE0: // LDH <a8>, A    b2 c12 flags:----
                    a8 = rom[PC + 1];
                    uint16_t addr = 0xFF00 + a8;
@@ -1188,6 +1211,14 @@ int cpu_step(void) {
                    mem_write16(SP, AF);
                    PC += 1;
                    return 16;
+        case 0xF6: // OR A, <n8>    b2 c8 flags:Z000
+                   n8 = rom[PC + 1];
+                   if (debug) printf("OR A, 0x%02X\n", n8);
+                   A = (A | n8);
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 2;
+                   return 8;
         case 0xF8: // LD HL, SP+e8    b2 c12 flags=00HC
                    e8 = (int8_t)rom[PC + 1];
                    if (debug) printf("LD HL, SP+0x%02X\n", e8);
