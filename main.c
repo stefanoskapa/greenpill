@@ -1054,6 +1054,17 @@ int cpu_step(void) {
             if (A < E) SETF_C; else CLRF_C;
             PC += 1;
             return 4;
+        case 0xC0: // RET NZ b1 c20, 8 flags:----
+            if (debug) printf("RET NZ\n");
+            if (!READF_Z) {
+                uint8_t low5 = rom[SP];
+                uint8_t high5 = rom[SP + 1];
+                SP += 2;
+                PC = (high5 << 8) | low5;
+                return 20;
+            }
+            PC += 1;
+            return 8;
         case 0xC1: // POP BC    b1 c12 flags:----
             C = rom[SP];
             B = rom[SP + 1];
@@ -1077,7 +1088,7 @@ int cpu_step(void) {
         case 0xC4: // CALL NZ, <a16>    b3 c24,12 flags:----
             a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
             if (debug) printf("CALL NZ, 0x%04X\n", a16);
-            if (READF_Z) {
+            if (!READF_Z) {
                 SP -= 2;
                 mem_write16(SP, PC + 3);
                 PC = a16;
@@ -1101,6 +1112,12 @@ int cpu_step(void) {
             CLRF_N;
             PC += 2;
             return 8;
+        case 0xC7: // RST $00    b1 c16 flags:----
+                   if (debug) printf("RST $00\n");
+                   SP -= 2;
+                   mem_write16(SP, PC + 1); 
+                   PC = 0x0000;
+                   return 16;
         case 0xC8: // RET Z b1 c20, 8 flags:----
             if (debug) printf("RET Z\n");
             if (READF_Z) {
@@ -1245,6 +1262,17 @@ int cpu_step(void) {
                        PC += 2;
                        return cycles;
                    }
+        case 0xCC: // CALL Z, <a16>    b3 c24,12 flags:----
+            a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
+            if (debug) printf("CALL Z, 0x%04X\n", a16);
+            if (READF_Z) {
+                SP -= 2;
+                mem_write16(SP, PC + 3);
+                PC = a16;
+                return 24;
+            }
+            PC += 3;
+            return 12;
         case 0xCD: // CALL <a16>    b3 c24 flags:----
                    a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
                    if (debug) printf("CALL 0x%04X\n", a16);
@@ -1265,6 +1293,12 @@ int cpu_step(void) {
                        PC += 2;
                        return 8;
                    }
+        case 0xCF: // RST $08    b1 c16 flags:----
+                   if (debug) printf("RST $08\n");
+                   SP -= 2;
+                   mem_write16(SP, PC + 1); 
+                   PC = 0x0008;
+                   return 16;
         case 0xD0: // RET NC    b1 c20, 8 flags:----
                    if (debug) printf("RET NC\n");
                    if (!READF_C) {
@@ -1283,6 +1317,26 @@ int cpu_step(void) {
                    SP += 2;
                    PC += 1;
                    return 12;
+        case 0xD2: // JP NC <a16>    b3 c16,12 flags:----
+            a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
+            if (debug) printf("JP NC 0x%04X", a16);
+            if (!READF_C) {
+                PC = a16;
+                return 16;
+            }
+            PC += 3;
+            return 12;
+        case 0xD4: // CALL NC, <a16>    b3 c24,12 flags:----
+            a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
+            if (debug) printf("CALL NC, 0x%04X\n", a16);
+            if (!READF_C) {
+                SP -= 2;
+                mem_write16(SP, PC + 3);
+                PC = a16;
+                return 24;
+            }
+            PC += 3;
+            return 12;
         case 0xD5: // PUSH DE    b1 c16 flags:----
                    if (debug) printf("PUSH DE\n");
                    SP -= 2;
@@ -1299,6 +1353,12 @@ int cpu_step(void) {
                    if (A == 0) SETF_Z; else CLRF_Z;
                    PC += 2;
                    return 8;
+        case 0xD7: // RST $10    b1 c16 flags:----
+                   if (debug) printf("RST $10\n");
+                   SP -= 2;
+                   mem_write16(SP, PC + 1); 
+                   PC = 0x0010;
+                   return 16;
         case 0xD8: // RET C    b1 c20, 8 flags:----
                    if (debug) printf("RET C\n");
                    if (READF_C) {
@@ -1310,6 +1370,36 @@ int cpu_step(void) {
                    }
                    PC += 1;
                    return 8;
+        case 0xD9: // RETI    b1 c16 flags:----
+            if (debug) printf("RET \n");
+            {
+            uint8_t low = rom[SP];
+            uint8_t high = rom[SP + 1];
+            ime_scheduled = true;
+            SP += 2;
+            PC = (high << 8) | low;
+            }
+            return 16;
+        case 0xDA: // JP C <a16>    b3 c16,12 flags:----
+            a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
+            if (debug) printf("JP C 0x%04X", a16);
+            if (READF_C) {
+                PC = a16;
+                return 16;
+            }
+            PC += 3;
+            return 12;
+        case 0xDC: // CALL C, <a16>    b3 c24,12 flags:----
+            a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
+            if (debug) printf("CALL C, 0x%04X\n", a16);
+            if (READF_C) {
+                SP -= 2;
+                mem_write16(SP, PC + 3);
+                PC = a16;
+                return 24;
+            }
+            PC += 3;
+            return 12;
         case 0xDE: // SBC A, <n8>    b2 c8 flags:Z1HC
                    n8 = rom[PC + 1];
                    if (debug) printf("SBC A, 0x%02X\n", n8);
@@ -1321,6 +1411,12 @@ int cpu_step(void) {
                    SETF_N;
                    PC += 2;
                    return 8;
+        case 0xDF: // RST $18    b1 c16 flags:----
+                   if (debug) printf("RST $18\n");
+                   SP -= 2;
+                   mem_write16(SP, PC + 1); 
+                   PC = 0x0018;
+                   return 16;
         case 0xE0: // LDH <a8>, A    b2 c12 flags:----
                    a8 = rom[PC + 1];
                    uint16_t addr = 0xFF00 + a8;
@@ -1356,6 +1452,12 @@ int cpu_step(void) {
                    CLRF_N; SETF_H; CLRF_C;
                    PC += 2;
                    return 8;
+        case 0xE7: // RST $20    b1 c16 flags:----
+                   if (debug) printf("RST $20\n");
+                   SP -= 2;
+                   mem_write16(SP, PC + 1); 
+                   PC = 0x0020;
+                   return 16;
         case 0xE8: // ADD SP, <e8>    b2 c16 flags=00HC
                    e8 = (int8_t)rom[PC + 1];
                    if (debug) printf("ADD SP, 0x%02X\n", e8);
@@ -1391,6 +1493,12 @@ int cpu_step(void) {
                    CLRF_N; CLRF_H; CLRF_C;
                    PC += 2;
                    return 8;
+        case 0xEF: // RST $28    b1 c16 flags:----
+                   if (debug) printf("RST $28\n");
+                   SP -= 2;
+                   mem_write16(SP, PC + 1); 
+                   PC = 0x0028;
+                   return 16;
         case 0xF0: // LDH A, <a8>    b2 c12 flags:----
                    a8 = rom[PC + 1];
                    A = rom[0xFF00 + a8];
@@ -1428,6 +1536,12 @@ int cpu_step(void) {
                    CLRF_N; CLRF_H; CLRF_C;
                    PC += 2;
                    return 8;
+        case 0xF7: // RST $30    b1 c16 flags:----
+                   if (debug) printf("RST $30\n");
+                   SP -= 2;
+                   mem_write16(SP, PC + 1); 
+                   PC = 0x0030;
+                   return 16;
         case 0xF8: // LD HL, SP+e8    b2 c12 flags=00HC
                    e8 = (int8_t)rom[PC + 1];
                    if (debug) printf("LD HL, SP+0x%02X\n", e8);
