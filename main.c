@@ -252,6 +252,14 @@ int cpu_step(void) {
             if (debug) printf("LD B, 0x%02X\n", B);
             PC += 2;
             return 8;
+        case 0x07: // RLCA    b1 c4 flags:000C
+            if (debug) printf("RLCA\n");
+            if ((A & 0b10000000) != 0) SETF_C; else CLRF_C;
+            A = (A << 1);
+            if (READF_C) A = (A | 0x01);
+            CLRF_Z; CLRF_N; CLRF_H;
+            PC += 1;
+            return 4;
         case 0x08: // LD [a16], SP    b3 c20 flags=----
             a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
             if (debug) printf("LD [0x%04X], SP\n", a16);
@@ -330,12 +338,31 @@ int cpu_step(void) {
             if (D == 0) SETF_Z; else CLRF_Z;
             PC += 1;
             return 4;
+        case 0x15:  // DEC D    b1 c4 flags:Z1H-
+            if (debug) printf("DEC D\n");
+            if ((D & 0x0F) == 0x00) SETF_H; else CLRF_H;
+            D--;
+            if (D == 0) SETF_Z; else CLRF_Z;
+            SETF_N;
+            PC += 1;
+            return 4;
         case 0x16: // LD D, <n8>    b2 c8 flags:----
             n8 = rom[PC + 1];
             if (debug) printf("LD D, 0x%02X\n", n8);
             D = n8;
             PC += 2;
             return 8;
+        case 0x17: // RLA    b1 c4 flags:000C
+            {
+            if (debug) printf("RLA\n");
+            bool oldCarry = READF_C;
+            if (A & 0b10000000) SETF_C; else CLRF_C;
+            A = (A << 1);
+            if (oldCarry) A |= 0x01;  
+            CLRF_Z; CLRF_N; CLRF_H;
+            PC += 1;
+            }
+            return 4;
         case 0x18: // JR <e8>    b2 c12 flags:----
             e8 = (int8_t)rom[PC + 1];
             if (debug) printf("JR 0x%04X\n", e8 + PC);
@@ -626,6 +653,12 @@ int cpu_step(void) {
             if (debug) printf("SCF\n");
             CLRF_N; CLRF_H;
             SETF_C;
+            PC += 1;
+            return 4;
+        case 0x3F: // CCF    b1 c4 flags:-00~C
+            if (debug) printf("CCF\n");
+            if (READF_C) CLRF_C; else SETF_C;
+            CLRF_N; CLRF_H;
             PC += 1;
             return 4;
         case 0x40: // LD B, B    b1, c4 flags:----
@@ -967,9 +1000,375 @@ int cpu_step(void) {
             if (debug) printf("LD A, A\n");
             PC += 1;
             return 4;
+        case 0x80: // ADD A, B    b1 c4 flags:Z0HC
+            if (debug) printf("ADD A, B\n");
+            if (A + B > 0xFF) SETF_C; else CLRF_C;
+            if ( (A & 0x0F) + (B & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+            A += B;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            PC += 2;
+            return 8;
+        case 0x81: // ADD A, C    b1 c4 flags:Z0HC
+            if (debug) printf("ADD A, C\n");
+            if (A + C > 0xFF) SETF_C; else CLRF_C;
+            if ( (A & 0x0F) + (C & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+            A += C;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            PC += 2;
+            return 8;
+        case 0x82: // ADD A, D    b1 c4 flags:Z0HC
+            if (debug) printf("ADD A, D\n");
+            if (A + D > 0xFF) SETF_C; else CLRF_C;
+            if ( (A & 0x0F) + (D & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+            A += D;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            PC += 2;
+            return 8;
+        case 0x83: // ADD A, E    b1 c4 flags:Z0HC
+            if (debug) printf("ADD A, E\n");
+            if (A + E > 0xFF) SETF_C; else CLRF_C;
+            if ( (A & 0x0F) + (E & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+            A += E;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            PC += 2;
+            return 8;
+        case 0x84: // ADD A, H    b1 c4 flags:Z0HC
+            if (debug) printf("ADD A, H\n");
+            if (A + H > 0xFF) SETF_C; else CLRF_C;
+            if ( (A & 0x0F) + (H & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+            A += H;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            PC += 2;
+            return 8;
+        case 0x85: // ADD A, L    b1 c4 flags:Z0HC
+            if (debug) printf("ADD A, L\n");
+            if (A + L > 0xFF) SETF_C; else CLRF_C;
+            if ( (A & 0x0F) + (L & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+            A += L;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            PC += 2;
+            return 8;
+        case 0x87: // ADD A, A    b1 c4 flags:Z0HC
+            if (debug) printf("ADD A, A\n");
+            if (A + A > 0xFF) SETF_C; else CLRF_C;
+            if ( (A & 0x0F) + (A & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+            A += A;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            PC += 2;
+            return 8;
+        case 0x88: { // ADC A, B    b1 c4 flags:Z0HC
+            if (debug) printf("ADC A, B\n");
+            uint8_t carry = READF_C;
+            uint16_t result = A + B + carry;
+            if (((A & 0x0F) + (B & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+            if (result > 0xFF) SETF_C; else CLRF_C;
+            A = (uint8_t)result;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            PC += 2;
+            return 8;
+            }
+        case 0x89: { // ADC A, C    b1 c4 flags:Z0HC
+            if (debug) printf("ADC A, C\n");
+            uint8_t carry = READF_C;
+            uint16_t result = A + C + carry;
+            if (((A & 0x0F) + (C & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+            if (result > 0xFF) SETF_C; else CLRF_C;
+            A = (uint8_t)result;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            PC += 2;
+            return 8;
+            }
+        case 0x8A: { // ADC A, D    b1 c4 flags:Z0HC
+            if (debug) printf("ADC A, D\n");
+            uint8_t carry = READF_C;
+            uint16_t result = A + D + carry;
+            if (((A & 0x0F) + (D & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+            if (result > 0xFF) SETF_C; else CLRF_C;
+            A = (uint8_t)result;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            PC += 2;
+            return 8;
+            }
+        case 0x8B: { // ADC A, E    b1 c4 flags:Z0HC
+            if (debug) printf("ADC A, E\n");
+            uint8_t carry = READF_C;
+            uint16_t result = A + E + carry;
+            if (((A & 0x0F) + (E & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+            if (result > 0xFF) SETF_C; else CLRF_C;
+            A = (uint8_t)result;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            PC += 2;
+            return 8;
+            }
+        case 0x8C: { // ADC A, H    b1 c4 flags:Z0HC
+            if (debug) printf("ADC A, H\n");
+            uint8_t carry = READF_C;
+            uint16_t result = A + H + carry;
+            if (((A & 0x0F) + (H & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+            if (result > 0xFF) SETF_C; else CLRF_C;
+            A = (uint8_t)result;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            PC += 2;
+            return 8;
+            }
+        case 0x8D: { // ADC A, L    b1 c4 flags:Z0HC
+            if (debug) printf("ADC A, L\n");
+            uint8_t carry = READF_C;
+            uint16_t result = A + L + carry;
+            if (((A & 0x0F) + (L & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+            if (result > 0xFF) SETF_C; else CLRF_C;
+            A = (uint8_t)result;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            PC += 2;
+            return 8;
+            }
+        case 0x8F: { // ADC A, A    b1 c4 flags:Z0HC
+            if (debug) printf("ADC A, A\n");
+            uint8_t carry = READF_C;
+            uint16_t result = A + A + carry;
+            if (((A & 0x0F) + (A & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+            if (result > 0xFF) SETF_C; else CLRF_C;
+            A = (uint8_t)result;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            PC += 2;
+            return 8;
+            }
+        case 0x90: // SUB A, B    b1 c4 flags:Z1HC
+           if (debug) printf("SUB A, B\n");
+           if (B > A) SETF_C; else CLRF_C;
+           if ((B & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+           SETF_N;
+           A -= B;
+           if (A == 0) SETF_Z; else CLRF_Z;
+           PC += 2;
+           return 4;
+        case 0x91: // SUB A, C    b1 c4 flags:Z1HC
+           if (debug) printf("SUB A, C\n");
+           if (C > A) SETF_C; else CLRF_C;
+           if ((C & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+           SETF_N;
+           A -= C;
+           if (A == 0) SETF_Z; else CLRF_Z;
+           PC += 2;
+           return 4;
+        case 0x92: // SUB A, D    b1 c4 flags:Z1HC
+           if (debug) printf("SUB A, D\n");
+           if (D > A) SETF_C; else CLRF_C;
+           if ((D & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+           SETF_N;
+           A -= D;
+           if (A == 0) SETF_Z; else CLRF_Z;
+           PC += 2;
+           return 4;
+        case 0x93: // SUB A, E    b1 c4 flags:Z1HC
+           if (debug) printf("SUB A, E\n");
+           if (E > A) SETF_C; else CLRF_C;
+           if ((E & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+           SETF_N;
+           A -= E;
+           if (A == 0) SETF_Z; else CLRF_Z;
+           PC += 2;
+           return 4;
+        case 0x94: // SUB A, H    b1 c4 flags:Z1HC
+           if (debug) printf("SUB A, H\n");
+           if (H > A) SETF_C; else CLRF_C;
+           if ((H & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+           SETF_N;
+           A -= H;
+           if (A == 0) SETF_Z; else CLRF_Z;
+           PC += 2;
+           return 4;
+        case 0x95: // SUB A, L    b1 c4 flags:Z1HC
+           if (debug) printf("SUB A, L\n");
+           if (L > A) SETF_C; else CLRF_C;
+           if ((L & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+           SETF_N;
+           A -= L;
+           if (A == 0) SETF_Z; else CLRF_Z;
+           PC += 2;
+           return 4;
+        case 0x97: // SUB A, A    b1 c4 flags:1100
+           if (debug) printf("SUB A, A\n");
+           SETF_Z; SETF_N; CLRF_H; CLRF_C;
+           A -= A;
+           PC += 2;
+           return 4;
+        case 0x98: // SBC A, B    b1 c4 flags:Z1HC
+           {
+           if (debug) printf("SBC A, B\n");
+           uint8_t carry = READF_C;
+           if (B + carry > A) SETF_C; else CLRF_C;
+           if ((B & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+           A = A - B - carry;
+           if (A == 0) SETF_Z; else CLRF_Z;
+           SETF_N;
+           PC += 1;
+           }
+           return 4;
+        case 0x99: // SBC A, C    b1 c4 flags:Z1HC
+           {
+           if (debug) printf("SBC A, C\n");
+           uint8_t carry = READF_C;
+           if (C + carry > A) SETF_C; else CLRF_C;
+           if ((C & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+           A = A - C - carry;
+           if (A == 0) SETF_Z; else CLRF_Z;
+           SETF_N;
+           PC += 1;
+           }
+           return 4;
+        case 0x9A: // SBC A, D    b1 c4 flags:Z1HC
+           {
+           if (debug) printf("SBC A, D\n");
+           uint8_t carry = READF_C;
+           if (D + carry > A) SETF_C; else CLRF_C;
+           if ((D & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+           A = A - D - carry;
+           if (A == 0) SETF_Z; else CLRF_Z;
+           SETF_N;
+           PC += 1;
+           }
+           return 4;
+        case 0x9B: // SBC A, E    b1 c4 flags:Z1HC
+           {
+           if (debug) printf("SBC A, E\n");
+           uint8_t carry = READF_C;
+           if (E + carry > A) SETF_C; else CLRF_C;
+           if ((E & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+           A = A - E - carry;
+           if (A == 0) SETF_Z; else CLRF_Z;
+           SETF_N;
+           PC += 1;
+           }
+           return 4;
+        case 0x9C: // SBC A, H    b1 c4 flags:Z1HC
+           {
+           if (debug) printf("SBC A, H\n");
+           uint8_t carry = READF_C;
+           if (H + carry > A) SETF_C; else CLRF_C;
+           if ((H & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+           A = A - H - carry;
+           if (A == 0) SETF_Z; else CLRF_Z;
+           SETF_N;
+           PC += 1;
+           }
+           return 4;
+        case 0x9D: // SBC A, L    b1 c4 flags:Z1HC
+           {
+           if (debug) printf("SBC A, L\n");
+           uint8_t carry = READF_C;
+           if (L + carry > A) SETF_C; else CLRF_C;
+           if ((L & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+           A = A - L - carry;
+           if (A == 0) SETF_Z; else CLRF_Z;
+           SETF_N;
+           PC += 1;
+           }
+           return 4;
+        case 0x9F: // SBC A, A    b1 c4 flags:Z1H-
+           {
+           if (debug) printf("SBC A, A\n");
+           uint8_t carry = READF_C;
+           if ((A & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+           A = A - A - carry;
+           if (A == 0) SETF_Z; else CLRF_Z;
+           SETF_N;
+           PC += 1;
+           }
+           return 4;
+        case 0xA0: // AND A, B    b1 c4 flags:Z010
+           if (debug) printf("AND A, B\n");
+           A = A & B;
+           if (A == 0) SETF_Z; else CLRF_Z;
+           CLRF_N; SETF_H; CLRF_C;
+           PC += 1;
+           return 4;
+        case 0xA1: // AND A, C    b1 c4 flags:Z010
+           if (debug) printf("AND A, C\n");
+           A = A & C;
+           if (A == 0) SETF_Z; else CLRF_Z;
+           CLRF_N; SETF_H; CLRF_C;
+           PC += 1;
+           return 4;
+        case 0xA2: // AND A, D    b1 c4 flags:Z010
+           if (debug) printf("AND A, D\n");
+           A = A & D;
+           if (A == 0) SETF_Z; else CLRF_Z;
+           CLRF_N; SETF_H; CLRF_C;
+           PC += 1;
+           return 4;
+        case 0xA3: // AND A, E    b1 c4 flags:Z010
+           if (debug) printf("AND A, E\n");
+           A = A & E;
+           if (A == 0) SETF_Z; else CLRF_Z;
+           CLRF_N; SETF_H; CLRF_C;
+           PC += 1;
+           return 4;
+        case 0xA4: // AND A, H    b1 c4 flags:Z010
+           if (debug) printf("AND A, H\n");
+           A = A & H;
+           if (A == 0) SETF_Z; else CLRF_Z;
+           CLRF_N; SETF_H; CLRF_C;
+           PC += 1;
+           return 4;
+        case 0xA5: // AND A, L    b1 c4 flags:Z010
+           if (debug) printf("AND A, L\n");
+           A = A & L;
+           if (A == 0) SETF_Z; else CLRF_Z;
+           CLRF_N; SETF_H; CLRF_C;
+           PC += 1;
+           return 4;
+        case 0xA7: // AND A, A    b1 c4 flags:Z010
+           if (debug) printf("AND A, A\n");
+           if (A == 0) SETF_Z; else CLRF_Z;
+           CLRF_N; SETF_H; CLRF_C;
+           PC += 1;
+           return 4;
+        case 0xA8: // XOR A, B    b1 c4 flags:Z000
+            if (debug) printf("XOR A, B\n");
+            A = A ^ B;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N; CLRF_H; CLRF_C;
+            PC += 1;
+            return 4;
         case 0xA9: // XOR A, C    b1 c4 flags:Z000
             if (debug) printf("XOR A, C\n");
             A = A ^ C;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N; CLRF_H; CLRF_C;
+            PC += 1;
+            return 4;
+        case 0xAA: // XOR A, D    b1 c4 flags:Z000
+            if (debug) printf("XOR A, D\n");
+            A = A ^ D;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N; CLRF_H; CLRF_C;
+            PC += 1;
+            return 4;
+        case 0xAB: // XOR A, E    b1 c4 flags:Z000
+            if (debug) printf("XOR A, E\n");
+            A = A ^ E;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N; CLRF_H; CLRF_C;
+            PC += 1;
+            return 4;
+        case 0xAC: // XOR A, H    b1 c4 flags:Z000
+            if (debug) printf("XOR A, H\n");
+            A = A ^ H;
             if (A == 0) SETF_Z; else CLRF_Z;
             CLRF_N; CLRF_H; CLRF_C;
             PC += 1;
@@ -1001,9 +1400,7 @@ int cpu_step(void) {
             if (debug) printf("OR A, B\n");
             A = A | B;
             if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N;
-            CLRF_H;
-            CLRF_C;
+            CLRF_N; CLRF_H; CLRF_C;
             PC += 1;
             return 4;
         case 0xB1: // OR A, C    b1 c4 flags:Z000
@@ -1013,6 +1410,34 @@ int cpu_step(void) {
             CLRF_N;
             CLRF_H;
             CLRF_C;
+            PC += 1;
+            return 4;
+        case 0xB2: // OR A, D   b1 c4 flags:Z000
+            if (debug) printf("OR A, D\n");
+            A = A | D;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N; CLRF_H; CLRF_C;
+            PC += 1;
+            return 4;
+        case 0xB3: // OR A, E   b1 c4 flags:Z000
+            if (debug) printf("OR A, E\n");
+            A = A | E;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N; CLRF_H; CLRF_C;
+            PC += 1;
+            return 4;
+        case 0xB4: // OR A, H   b1 c4 flags:Z000
+            if (debug) printf("OR A, H\n");
+            A = A | H;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N; CLRF_H; CLRF_C;
+            PC += 1;
+            return 4;
+        case 0xB5: // OR A, L   b1 c4 flags:Z000
+            if (debug) printf("OR A, L\n");
+            A = A | L;
+            if (A == 0) SETF_Z; else CLRF_Z;
+            CLRF_N; CLRF_H; CLRF_C;
             PC += 1;
             return 4;
         case 0xB6: // OR A, [HL]    b1 c8 flags:Z000
@@ -1032,7 +1457,7 @@ int cpu_step(void) {
             if (debug) printf("CP A, B\n");
             if (A == B) SETF_Z; else CLRF_Z;
             SETF_N;
-            if ((A & 0x0F) > (B & 0x0F)) SETF_H; else CLRF_H;
+            if ((A & 0x0F) < (B & 0x0F)) SETF_H; else CLRF_H;
             if (A < B) SETF_C; else CLRF_C;
             PC += 1;
             return 4;
@@ -1040,7 +1465,7 @@ int cpu_step(void) {
             if (debug) printf("CP A, C\n");
             if (A == C) SETF_Z; else CLRF_Z;
             SETF_N;
-            if ((A & 0x0F) > (C & 0x0F)) SETF_H; else CLRF_H;
+            if ((A & 0x0F) < (C & 0x0F)) SETF_H; else CLRF_H;
             if (A < C) SETF_C; else CLRF_C;
             PC += 1;
             return 4;
@@ -1048,7 +1473,7 @@ int cpu_step(void) {
             if (debug) printf("CP A, D\n");
             if (A == D) SETF_Z; else CLRF_Z;
             SETF_N;
-            if ((A & 0x0F) > (D & 0x0F)) SETF_H; else CLRF_H;
+            if ((A & 0x0F) < (D & 0x0F)) SETF_H; else CLRF_H;
             if (A < D) SETF_C; else CLRF_C;
             PC += 1;
             return 4;
@@ -1056,8 +1481,30 @@ int cpu_step(void) {
             if (debug) printf("CP A, E\n");
             if (A == E) SETF_Z; else CLRF_Z;
             SETF_N;
-            if ((A & 0x0F) > (E & 0x0F)) SETF_H; else CLRF_H;
+            if ((A & 0x0F) < (E & 0x0F)) SETF_H; else CLRF_H;
             if (A < E) SETF_C; else CLRF_C;
+            PC += 1;
+            return 4;
+        case 0xBC: // CP A, H    b1 c4 flags:Z1HC
+            if (debug) printf("CP A, H\n");
+            if (A == H) SETF_Z; else CLRF_Z;
+            SETF_N;
+            if ((A & 0x0F) < (H & 0x0F)) SETF_H; else CLRF_H;
+            if (A < H) SETF_C; else CLRF_C;
+            PC += 1;
+            return 4;
+        case 0xBD: // CP A, L    b1 c4 flags:Z1HC
+            if (debug) printf("CP A, L\n");
+            if (A == L) SETF_Z; else CLRF_Z;
+            SETF_N;
+            if ((A & 0x0F) < (L & 0x0F)) SETF_H; else CLRF_H;
+            if (A < L) SETF_C; else CLRF_C;
+            PC += 1;
+            return 4;
+        case 0xBF: // CP A, A    b1 c4 flags:1100
+            if (debug) printf("CP A, A\n");
+            SETF_Z; SETF_N;
+            CLRF_H; CLRF_C;
             PC += 1;
             return 4;
         case 0xC0: // RET NZ b1 c20, 8 flags:----
