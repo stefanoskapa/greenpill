@@ -606,7 +606,7 @@ int cpu_step(void) {
             return 4;
         case 0x5D: // LD E, L    b1 c4 flags:----
             if (debug) printf("LD E, L\n");
-            E = A;
+            E = L;
             PC += 1;
             return 4;
         case 0x5E: // LD E, [HL]    b1 c8 flags:----
