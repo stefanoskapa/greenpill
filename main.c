@@ -123,42 +123,42 @@ int main(int argc, char **argv) {
     uint16_t cycles = 0;
 
     if (sdl_render) { 
-    SDL_Init(SDL_INIT_VIDEO);
-    window = SDL_CreateWindow(
-            "GB Emulator",
-            SDL_WINDOWPOS_CENTERED,
-            SDL_WINDOWPOS_CENTERED,
-            160 * 3, 144 * 3,
-            SDL_WINDOW_SHOWN
-            );
-    renderer = SDL_CreateRenderer(window, -1, 0);
-    texture = SDL_CreateTexture(
-            renderer,
-            SDL_PIXELFORMAT_ARGB8888,
-            SDL_TEXTUREACCESS_STREAMING,
-            160, 144
-            ); 
+        SDL_Init(SDL_INIT_VIDEO);
+        window = SDL_CreateWindow(
+                "GB Emulator",
+                SDL_WINDOWPOS_CENTERED,
+                SDL_WINDOWPOS_CENTERED,
+                160 * 3, 144 * 3,
+                SDL_WINDOW_SHOWN
+                );
+        renderer = SDL_CreateRenderer(window, -1, 0);
+        texture = SDL_CreateTexture(
+                renderer,
+                SDL_PIXELFORMAT_ARGB8888,
+                SDL_TEXTUREACCESS_STREAMING,
+                160, 144
+                ); 
     }
 
 
 
-    #define CYCLES_PER_FRAME 70224  // 154 scanlines × 456 cycles
+#define CYCLES_PER_FRAME 70224  // 154 scanlines × 456 cycles
 #define NANOS_PER_FRAME 16742706  // ~59.73 FPS
 
-uint64_t frame_cycles = 0;
-struct timespec frame_start, frame_end;
+    uint64_t frame_cycles = 0;
+    struct timespec frame_start, frame_end;
 
-clock_gettime(CLOCK_MONOTONIC, &frame_start);
-SDL_Event event;
+    clock_gettime(CLOCK_MONOTONIC, &frame_start);
+    SDL_Event event;
 
     while (true) {
 
         while (SDL_PollEvent(&event)) {
-        if (event.type == SDL_QUIT) {
-            SDL_Quit();
-            return 0;
+            if (event.type == SDL_QUIT) {
+                SDL_Quit();
+                return 0;
+            }
         }
-    }
         cycles = cpu_step();
         if (debug) show_registers();
 
@@ -172,21 +172,21 @@ SDL_Event event;
 
         frame_cycles += cycles;
 
-    if (frame_cycles >= CYCLES_PER_FRAME) {
-        frame_cycles -= CYCLES_PER_FRAME;
+        if (frame_cycles >= CYCLES_PER_FRAME) {
+            frame_cycles -= CYCLES_PER_FRAME;
 
-        clock_gettime(CLOCK_MONOTONIC, &frame_end);
-        long elapsed = (frame_end.tv_sec - frame_start.tv_sec) * 1000000000L
-                     + (frame_end.tv_nsec - frame_start.tv_nsec);
-        long remaining = NANOS_PER_FRAME - elapsed;
+            clock_gettime(CLOCK_MONOTONIC, &frame_end);
+            long elapsed = (frame_end.tv_sec - frame_start.tv_sec) * 1000000000L
+                + (frame_end.tv_nsec - frame_start.tv_nsec);
+            long remaining = NANOS_PER_FRAME - elapsed;
 
-        if (remaining > 0) {
-            struct timespec sleep_time = {0, remaining};
-            nanosleep(&sleep_time, NULL);
+            if (remaining > 0) {
+                struct timespec sleep_time = {0, remaining};
+                nanosleep(&sleep_time, NULL);
+            }
+
+            clock_gettime(CLOCK_MONOTONIC, &frame_start);
         }
-
-        clock_gettime(CLOCK_MONOTONIC, &frame_start);
-    }
     }
 
     return EXIT_SUCCESS;
@@ -251,9 +251,9 @@ int ppu_step(int cycles) {
             frame_presented = true;
             rom[0xFF0F] |= 0x01;  // Request VBlank interrupt
             if (sdl_render) {
-            SDL_UpdateTexture(texture, NULL, framebuffer, 160 * sizeof(uint32_t));
-            SDL_RenderCopy(renderer, texture, NULL, NULL);
-            SDL_RenderPresent(renderer);
+                SDL_UpdateTexture(texture, NULL, framebuffer, 160 * sizeof(uint32_t));
+                SDL_RenderCopy(renderer, texture, NULL, NULL);
+                SDL_RenderPresent(renderer);
             }
         }
     } else if (ppu_dots <= 80) {
