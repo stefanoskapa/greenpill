@@ -39,6 +39,8 @@ void inc_reg16(uint8_t *low, uint8_t *high);
 void timer_step(int cycles);
 void handle_interrupts(void);
 
+bool debug = false;
+bool sdl_render = true;
 uint32_t framebuffer[160 * 144];
 SDL_Window *window;
 SDL_Renderer *renderer;
@@ -51,7 +53,6 @@ uint32_t palette[4] = {
     0xFF081820   // Darkest (color 3) - black/dark green
 };
 bool scanline_rendered = false;
-bool debug = false;
 bool frame_presented = false;
 uint8_t rom[2000000];
 
@@ -82,11 +83,28 @@ uint8_t *LY = &rom[0xFF44];
 
 int main(int argc, char **argv) {
 
+    A = 0x01;
+    F = 0xB0;
+    B = 0x00;
+    C = 0x13;
+    D = 0x00;
+    E = 0xD8;
+    H = 0x01;
+    L = 0x4D;
+    rom[0xFF40] = 0x91;  // LCDC - LCD ON!
+    rom[0xFF47] = 0xFC;  // BGP palette
+    rom[0xFF44] = 0;  // LY starts at 0
+    SP = 0xFFFE;
     if (argc < 2) {
         fprintf(stderr, "No rom file was provided\n");
         exit(1);
     }
-
+    if (argc > 2 && strcmp(argv[2],"-d") == 0) {
+        debug = true;
+    } 
+    if (argc > 3 && strcmp(argv[3],"-s") == 0) {
+        sdl_render = false;
+    } 
     FILE *rom_file = fopen(argv[1], "rb");
     if (rom_file == NULL) {
         fprintf(stderr, "Could not access file: %s\n", argv[1]);
@@ -104,25 +122,45 @@ int main(int argc, char **argv) {
 
     uint16_t cycles = 0;
 
-      SDL_Init(SDL_INIT_VIDEO);
-window = SDL_CreateWindow(
-    "GB Emulator",
-    SDL_WINDOWPOS_CENTERED,
-    SDL_WINDOWPOS_CENTERED,
-    160 * 3, 144 * 3,
-    SDL_WINDOW_SHOWN
-);
-renderer = SDL_CreateRenderer(window, -1, 0);
-texture = SDL_CreateTexture(
-    renderer,
-    SDL_PIXELFORMAT_ARGB8888,
-    SDL_TEXTUREACCESS_STREAMING,
-    160, 144
-); 
+    if (sdl_render) { 
+    SDL_Init(SDL_INIT_VIDEO);
+    window = SDL_CreateWindow(
+            "GB Emulator",
+            SDL_WINDOWPOS_CENTERED,
+            SDL_WINDOWPOS_CENTERED,
+            160 * 3, 144 * 3,
+            SDL_WINDOW_SHOWN
+            );
+    renderer = SDL_CreateRenderer(window, -1, 0);
+    texture = SDL_CreateTexture(
+            renderer,
+            SDL_PIXELFORMAT_ARGB8888,
+            SDL_TEXTUREACCESS_STREAMING,
+            160, 144
+            ); 
+    }
+
+
+
+    #define CYCLES_PER_FRAME 70224  // 154 scanlines × 456 cycles
+#define NANOS_PER_FRAME 16742706  // ~59.73 FPS
+
+uint64_t frame_cycles = 0;
+struct timespec frame_start, frame_end;
+
+clock_gettime(CLOCK_MONOTONIC, &frame_start);
+SDL_Event event;
 
     while (true) {
 
+        while (SDL_PollEvent(&event)) {
+        if (event.type == SDL_QUIT) {
+            SDL_Quit();
+            return 0;
+        }
+    }
         cycles = cpu_step();
+        if (debug) show_registers();
 
         timer_step(cycles);
 
@@ -131,7 +169,24 @@ texture = SDL_CreateTexture(
         }
 
         ppu_step(cycles);
-        //for (int zzz = 0; zzz < 200000; zzz++) {}
+
+        frame_cycles += cycles;
+
+    if (frame_cycles >= CYCLES_PER_FRAME) {
+        frame_cycles -= CYCLES_PER_FRAME;
+
+        clock_gettime(CLOCK_MONOTONIC, &frame_end);
+        long elapsed = (frame_end.tv_sec - frame_start.tv_sec) * 1000000000L
+                     + (frame_end.tv_nsec - frame_start.tv_nsec);
+        long remaining = NANOS_PER_FRAME - elapsed;
+
+        if (remaining > 0) {
+            struct timespec sleep_time = {0, remaining};
+            nanosleep(&sleep_time, NULL);
+        }
+
+        clock_gettime(CLOCK_MONOTONIC, &frame_start);
+    }
     }
 
     return EXIT_SUCCESS;
@@ -149,27 +204,57 @@ texture = SDL_CreateTexture(
 //
 // Mode order: 2 -> 3 -> 0 (loop until frame complete) -> 1 
 int ppu_step(int cycles) {
+    static int frame_count = 0;
+    if (*LY == 0 && ppu_dots < 10) {
+        frame_count++;
+    }
+
+
+
     ppu_dots += cycles;
-    
+
+    // Update STAT register (0xFF41) with current mode
+    uint8_t stat = rom[0xFF41] & 0xFC;  // Keep upper bits, clear mode bits
+    if (*LY >= 144) {
+        stat |= 0x01;  // Mode 1: VBlank
+        if (!frame_presented) {
+            frame_presented = true;
+        }
+    } else if (ppu_dots <= 80) {
+        stat |= 0x02;  // Mode 2: OAM scan
+    } else if (ppu_dots <= 80 + 172) {
+        stat |= 0x03;  // Mode 3: Drawing
+    } else {
+        stat |= 0x00;  // Mode 0: HBlank
+    }
+    rom[0xFF41] = stat; 
+
+
+
+
     if (ppu_dots >= 456) {
         ppu_dots -= 456;
         (*LY)++;
         scanline_rendered = false;
-        
+
         if (*LY > 153) {
             *LY = 0;
             frame_presented = false;
         }
     }
-
+    if (*LY == 0) {
+        //printf("LCDC: %02X\n", *LCDC);
+    }
     if (*LY >= 144) {
         // VBlank mode (mode 1)
         if (!frame_presented) {
             frame_presented = true;
             rom[0xFF0F] |= 0x01;  // Request VBlank interrupt
+            if (sdl_render) {
             SDL_UpdateTexture(texture, NULL, framebuffer, 160 * sizeof(uint32_t));
             SDL_RenderCopy(renderer, texture, NULL, NULL);
             SDL_RenderPresent(renderer);
+            }
         }
     } else if (ppu_dots <= 80) {
         // OAM scan (mode 2)
@@ -177,25 +262,25 @@ int ppu_step(int cycles) {
         // Drawing (mode 3)
         if (!scanline_rendered) {
             scanline_rendered = true;
-            
+
             uint16_t bg_tilemap_addr;
             if ((*LCDC & 0b00001000) == 0) {
                 bg_tilemap_addr = 0x9800;
             } else {
                 bg_tilemap_addr = 0x9C00;
             }
-            
+
             int x = 0;
             int tile_row = *LY / 8;
             int row_in_tile = *LY % 8;
-            
+
             for (int i = 0; i < 20; i++) {
                 uint8_t index = rom[bg_tilemap_addr + (tile_row * 32) + i];
                 uint16_t tile_addr = 0x8000 + (index * 16);
-                
+
                 uint8_t pixels_a = rom[tile_addr + (row_in_tile * 2)];
                 uint8_t pixels_b = rom[tile_addr + (row_in_tile * 2) + 1];
-                
+
                 for (int bit = 7; bit >= 0; bit--) {
                     int lo = (pixels_a >> bit) & 1;
                     int hi = (pixels_b >> bit) & 1;
@@ -208,11 +293,10 @@ int ppu_step(int cycles) {
     } else {
         // HBlank (mode 0)
     }
-    
+
     return 0;
 }
 int cpu_step(void) {
-
     uint8_t n8 = 0;   // 8-bit integer signed or unsigned
     uint16_t n16 = 0; // 16-bit integer signed or unsigned
     int8_t e8 = 0;    // 8-bit signed offset!
@@ -224,7 +308,6 @@ int cpu_step(void) {
     }
     uint8_t op = rom[PC];
     if (debug) printf("0x%04X: ", PC);
-
     switch (op) {
         case 0x00: // NOP    b1 c4 flags:----
             if (debug) printf("NOP\n");
@@ -375,13 +458,13 @@ int cpu_step(void) {
             return 8;
         case 0x17: // RLA    b1 c4 flags:000C
             {
-            if (debug) printf("RLA\n");
-            bool oldCarry = READF_C;
-            if (A & 0b10000000) SETF_C; else CLRF_C;
-            A = (A << 1);
-            if (oldCarry) A |= 0x01;  
-            CLRF_Z; CLRF_N; CLRF_H;
-            PC += 1;
+                if (debug) printf("RLA\n");
+                bool oldCarry = READF_C;
+                if (A & 0b10000000) SETF_C; else CLRF_C;
+                A = (A << 1);
+                if (oldCarry) A |= 0x01;  
+                CLRF_Z; CLRF_N; CLRF_H;
+                PC += 1;
             }
             return 4;
         case 0x18: // JR <e8>    b2 c12 flags:----
@@ -962,6 +1045,8 @@ int cpu_step(void) {
             return 8;
         case 0x76: // HALT    b1 c4 flags:----
             if (debug) printf("HALT\n");
+            printf("HALT: IME=%d IE=%02X IF=%02X\n", IME, rom[0xFFFF], rom[0xFF0F]);
+            exit(1);
             {
                 uint8_t IE = rom[0xFFFF];
                 uint8_t IF = rom[0xFF0F];
@@ -1106,80 +1191,80 @@ int cpu_step(void) {
             A += A;
             if (A == 0) SETF_Z; else CLRF_Z;
             CLRF_N;
-            PC += 2;
-            return 8;
+            PC += 1;
+            return 4;
         case 0x88: { // ADC A, B    b1 c4 flags:Z0HC
-            if (debug) printf("ADC A, B\n");
-            uint8_t carry = READF_C;
-            uint16_t result = A + B + carry;
-            if (((A & 0x0F) + (B & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
-            if (result > 0xFF) SETF_C; else CLRF_C;
-            A = (uint8_t)result;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N;
-            PC += 2;
-            return 8;
-            }
+                       if (debug) printf("ADC A, B\n");
+                       uint8_t carry = READF_C;
+                       uint16_t result = A + B + carry;
+                       if (((A & 0x0F) + (B & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+                       if (result > 0xFF) SETF_C; else CLRF_C;
+                       A = (uint8_t)result;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       CLRF_N;
+                       PC += 1;
+                       return 4;
+                   }
         case 0x89: { // ADC A, C    b1 c4 flags:Z0HC
-            if (debug) printf("ADC A, C\n");
-            uint8_t carry = READF_C;
-            uint16_t result = A + C + carry;
-            if (((A & 0x0F) + (C & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
-            if (result > 0xFF) SETF_C; else CLRF_C;
-            A = (uint8_t)result;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N;
-            PC += 2;
-            return 8;
-            }
+                       if (debug) printf("ADC A, C\n");
+                       uint8_t carry = READF_C;
+                       uint16_t result = A + C + carry;
+                       if (((A & 0x0F) + (C & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+                       if (result > 0xFF) SETF_C; else CLRF_C;
+                       A = (uint8_t)result;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       CLRF_N;
+                       PC += 1;
+                       return 4;
+                   }
         case 0x8A: { // ADC A, D    b1 c4 flags:Z0HC
-            if (debug) printf("ADC A, D\n");
-            uint8_t carry = READF_C;
-            uint16_t result = A + D + carry;
-            if (((A & 0x0F) + (D & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
-            if (result > 0xFF) SETF_C; else CLRF_C;
-            A = (uint8_t)result;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N;
-            PC += 2;
-            return 8;
-            }
+                       if (debug) printf("ADC A, D\n");
+                       uint8_t carry = READF_C;
+                       uint16_t result = A + D + carry;
+                       if (((A & 0x0F) + (D & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+                       if (result > 0xFF) SETF_C; else CLRF_C;
+                       A = (uint8_t)result;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       CLRF_N;
+                       PC += 1;
+                       return 4;
+                   }
         case 0x8B: { // ADC A, E    b1 c4 flags:Z0HC
-            if (debug) printf("ADC A, E\n");
-            uint8_t carry = READF_C;
-            uint16_t result = A + E + carry;
-            if (((A & 0x0F) + (E & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
-            if (result > 0xFF) SETF_C; else CLRF_C;
-            A = (uint8_t)result;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N;
-            PC += 2;
-            return 8;
-            }
+                       if (debug) printf("ADC A, E\n");
+                       uint8_t carry = READF_C;
+                       uint16_t result = A + E + carry;
+                       if (((A & 0x0F) + (E & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+                       if (result > 0xFF) SETF_C; else CLRF_C;
+                       A = (uint8_t)result;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       CLRF_N;
+                       PC += 1;
+                       return 4;
+                   }
         case 0x8C: { // ADC A, H    b1 c4 flags:Z0HC
-            if (debug) printf("ADC A, H\n");
-            uint8_t carry = READF_C;
-            uint16_t result = A + H + carry;
-            if (((A & 0x0F) + (H & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
-            if (result > 0xFF) SETF_C; else CLRF_C;
-            A = (uint8_t)result;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N;
-            PC += 2;
-            return 8;
-            }
+                       if (debug) printf("ADC A, H\n");
+                       uint8_t carry = READF_C;
+                       uint16_t result = A + H + carry;
+                       if (((A & 0x0F) + (H & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+                       if (result > 0xFF) SETF_C; else CLRF_C;
+                       A = (uint8_t)result;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       CLRF_N;
+                       PC += 1;
+                       return 4;
+                   }
         case 0x8D: { // ADC A, L    b1 c4 flags:Z0HC
-            if (debug) printf("ADC A, L\n");
-            uint8_t carry = READF_C;
-            uint16_t result = A + L + carry;
-            if (((A & 0x0F) + (L & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
-            if (result > 0xFF) SETF_C; else CLRF_C;
-            A = (uint8_t)result;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N;
-            PC += 2;
-            return 8;
-            }
+                       if (debug) printf("ADC A, L\n");
+                       uint8_t carry = READF_C;
+                       uint16_t result = A + L + carry;
+                       if (((A & 0x0F) + (L & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+                       if (result > 0xFF) SETF_C; else CLRF_C;
+                       A = (uint8_t)result;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       CLRF_N;
+                       PC += 1;
+                       return 4;
+                   }
         case 0x8E: { // ADC A, [HL]    b1 c8 flags:Z0HC
                        n8 = rom[HL];
                        if (debug) printf("ADC A, [HL]");
@@ -1194,71 +1279,71 @@ int cpu_step(void) {
                        return 8;
                    }
         case 0x8F: { // ADC A, A    b1 c4 flags:Z0HC
-            if (debug) printf("ADC A, A\n");
-            uint8_t carry = READF_C;
-            uint16_t result = A + A + carry;
-            if (((A & 0x0F) + (A & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
-            if (result > 0xFF) SETF_C; else CLRF_C;
-            A = (uint8_t)result;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N;
-            PC += 2;
-            return 8;
-            }
+                       if (debug) printf("ADC A, A\n");
+                       uint8_t carry = READF_C;
+                       uint16_t result = A + A + carry;
+                       if (((A & 0x0F) + (A & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+                       if (result > 0xFF) SETF_C; else CLRF_C;
+                       A = (uint8_t)result;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       CLRF_N;
+                       PC += 1;
+                       return 4;
+                   }
         case 0x90: // SUB A, B    b1 c4 flags:Z1HC
-           if (debug) printf("SUB A, B\n");
-           if (B > A) SETF_C; else CLRF_C;
-           if ((B & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
-           SETF_N;
-           A -= B;
-           if (A == 0) SETF_Z; else CLRF_Z;
-           PC += 2;
-           return 4;
+                   if (debug) printf("SUB A, B\n");
+                   if (B > A) SETF_C; else CLRF_C;
+                   if ((B & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+                   SETF_N;
+                   A -= B;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   PC += 1;
+                   return 4;
         case 0x91: // SUB A, C    b1 c4 flags:Z1HC
-           if (debug) printf("SUB A, C\n");
-           if (C > A) SETF_C; else CLRF_C;
-           if ((C & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
-           SETF_N;
-           A -= C;
-           if (A == 0) SETF_Z; else CLRF_Z;
-           PC += 2;
-           return 4;
+                   if (debug) printf("SUB A, C\n");
+                   if (C > A) SETF_C; else CLRF_C;
+                   if ((C & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+                   SETF_N;
+                   A -= C;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   PC += 1;
+                   return 4;
         case 0x92: // SUB A, D    b1 c4 flags:Z1HC
-           if (debug) printf("SUB A, D\n");
-           if (D > A) SETF_C; else CLRF_C;
-           if ((D & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
-           SETF_N;
-           A -= D;
-           if (A == 0) SETF_Z; else CLRF_Z;
-           PC += 2;
-           return 4;
+                   if (debug) printf("SUB A, D\n");
+                   if (D > A) SETF_C; else CLRF_C;
+                   if ((D & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+                   SETF_N;
+                   A -= D;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   PC += 1;
+                   return 4;
         case 0x93: // SUB A, E    b1 c4 flags:Z1HC
-           if (debug) printf("SUB A, E\n");
-           if (E > A) SETF_C; else CLRF_C;
-           if ((E & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
-           SETF_N;
-           A -= E;
-           if (A == 0) SETF_Z; else CLRF_Z;
-           PC += 2;
-           return 4;
+                   if (debug) printf("SUB A, E\n");
+                   if (E > A) SETF_C; else CLRF_C;
+                   if ((E & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+                   SETF_N;
+                   A -= E;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   PC += 1;
+                   return 4;
         case 0x94: // SUB A, H    b1 c4 flags:Z1HC
-           if (debug) printf("SUB A, H\n");
-           if (H > A) SETF_C; else CLRF_C;
-           if ((H & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
-           SETF_N;
-           A -= H;
-           if (A == 0) SETF_Z; else CLRF_Z;
-           PC += 2;
-           return 4;
+                   if (debug) printf("SUB A, H\n");
+                   if (H > A) SETF_C; else CLRF_C;
+                   if ((H & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+                   SETF_N;
+                   A -= H;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   PC += 1;
+                   return 4;
         case 0x95: // SUB A, L    b1 c4 flags:Z1HC
-           if (debug) printf("SUB A, L\n");
-           if (L > A) SETF_C; else CLRF_C;
-           if ((L & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
-           SETF_N;
-           A -= L;
-           if (A == 0) SETF_Z; else CLRF_Z;
-           PC += 2;
-           return 4;
+                   if (debug) printf("SUB A, L\n");
+                   if (L > A) SETF_C; else CLRF_C;
+                   if ((L & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+                   SETF_N;
+                   A -= L;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   PC += 1;
+                   return 4;
         case 0x96: // SUB A, [HL]    b1 c8 flags:Z1HC
                    n8 = rom[HL];
                    if (debug) printf("SUB A, [HL]\n");
@@ -1270,83 +1355,83 @@ int cpu_step(void) {
                    PC += 1;
                    return 8;
         case 0x97: // SUB A, A    b1 c4 flags:1100
-           if (debug) printf("SUB A, A\n");
-           SETF_Z; SETF_N; CLRF_H; CLRF_C;
-           A -= A;
-           PC += 2;
-           return 4;
+                   if (debug) printf("SUB A, A\n");
+                   SETF_Z; SETF_N; CLRF_H; CLRF_C;
+                   A -= A;
+                   PC += 1;
+                   return 4;
         case 0x98: // SBC A, B    b1 c4 flags:Z1HC
-           {
-           if (debug) printf("SBC A, B\n");
-           uint8_t carry = READF_C;
-           if (B + carry > A) SETF_C; else CLRF_C;
-           if ((B & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
-           A = A - B - carry;
-           if (A == 0) SETF_Z; else CLRF_Z;
-           SETF_N;
-           PC += 1;
-           }
-           return 4;
+                   {
+                       if (debug) printf("SBC A, B\n");
+                       uint8_t carry = READF_C;
+                       if (B + carry > A) SETF_C; else CLRF_C;
+                       if ((B & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+                       A = A - B - carry;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       SETF_N;
+                       PC += 1;
+                   }
+                   return 4;
         case 0x99: // SBC A, C    b1 c4 flags:Z1HC
-           {
-           if (debug) printf("SBC A, C\n");
-           uint8_t carry = READF_C;
-           if (C + carry > A) SETF_C; else CLRF_C;
-           if ((C & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
-           A = A - C - carry;
-           if (A == 0) SETF_Z; else CLRF_Z;
-           SETF_N;
-           PC += 1;
-           }
-           return 4;
+                   {
+                       if (debug) printf("SBC A, C\n");
+                       uint8_t carry = READF_C;
+                       if (C + carry > A) SETF_C; else CLRF_C;
+                       if ((C & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+                       A = A - C - carry;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       SETF_N;
+                       PC += 1;
+                   }
+                   return 4;
         case 0x9A: // SBC A, D    b1 c4 flags:Z1HC
-           {
-           if (debug) printf("SBC A, D\n");
-           uint8_t carry = READF_C;
-           if (D + carry > A) SETF_C; else CLRF_C;
-           if ((D & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
-           A = A - D - carry;
-           if (A == 0) SETF_Z; else CLRF_Z;
-           SETF_N;
-           PC += 1;
-           }
-           return 4;
+                   {
+                       if (debug) printf("SBC A, D\n");
+                       uint8_t carry = READF_C;
+                       if (D + carry > A) SETF_C; else CLRF_C;
+                       if ((D & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+                       A = A - D - carry;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       SETF_N;
+                       PC += 1;
+                   }
+                   return 4;
         case 0x9B: // SBC A, E    b1 c4 flags:Z1HC
-           {
-           if (debug) printf("SBC A, E\n");
-           uint8_t carry = READF_C;
-           if (E + carry > A) SETF_C; else CLRF_C;
-           if ((E & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
-           A = A - E - carry;
-           if (A == 0) SETF_Z; else CLRF_Z;
-           SETF_N;
-           PC += 1;
-           }
-           return 4;
+                   {
+                       if (debug) printf("SBC A, E\n");
+                       uint8_t carry = READF_C;
+                       if (E + carry > A) SETF_C; else CLRF_C;
+                       if ((E & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+                       A = A - E - carry;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       SETF_N;
+                       PC += 1;
+                   }
+                   return 4;
         case 0x9C: // SBC A, H    b1 c4 flags:Z1HC
-           {
-           if (debug) printf("SBC A, H\n");
-           uint8_t carry = READF_C;
-           if (H + carry > A) SETF_C; else CLRF_C;
-           if ((H & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
-           A = A - H - carry;
-           if (A == 0) SETF_Z; else CLRF_Z;
-           SETF_N;
-           PC += 1;
-           }
-           return 4;
+                   {
+                       if (debug) printf("SBC A, H\n");
+                       uint8_t carry = READF_C;
+                       if (H + carry > A) SETF_C; else CLRF_C;
+                       if ((H & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+                       A = A - H - carry;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       SETF_N;
+                       PC += 1;
+                   }
+                   return 4;
         case 0x9D: // SBC A, L    b1 c4 flags:Z1HC
-           {
-           if (debug) printf("SBC A, L\n");
-           uint8_t carry = READF_C;
-           if (L + carry > A) SETF_C; else CLRF_C;
-           if ((L & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
-           A = A - L - carry;
-           if (A == 0) SETF_Z; else CLRF_Z;
-           SETF_N;
-           PC += 1;
-           }
-           return 4;
+                   {
+                       if (debug) printf("SBC A, L\n");
+                       uint8_t carry = READF_C;
+                       if (L + carry > A) SETF_C; else CLRF_C;
+                       if ((L & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+                       A = A - L - carry;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       SETF_N;
+                       PC += 1;
+                   }
+                   return 4;
         case 0x9E: // SBC A, [HL]    b1 c8 flags:Z1HC
                    n8 = rom[HL];
                    if (debug) printf("SBC A, [HL]\n");
@@ -1359,58 +1444,58 @@ int cpu_step(void) {
                    PC += 1;
                    return 8;
         case 0x9F: // SBC A, A    b1 c4 flags:Z1H-
-           {
-           if (debug) printf("SBC A, A\n");
-           uint8_t carry = READF_C;
-           if ((A & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
-           A = A - A - carry;
-           if (A == 0) SETF_Z; else CLRF_Z;
-           SETF_N;
-           PC += 1;
-           }
-           return 4;
+                   {
+                       if (debug) printf("SBC A, A\n");
+                       uint8_t carry = READF_C;
+                       if ((A & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+                       A = A - A - carry;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       SETF_N;
+                       PC += 1;
+                   }
+                   return 4;
         case 0xA0: // AND A, B    b1 c4 flags:Z010
-           if (debug) printf("AND A, B\n");
-           A = A & B;
-           if (A == 0) SETF_Z; else CLRF_Z;
-           CLRF_N; SETF_H; CLRF_C;
-           PC += 1;
-           return 4;
+                   if (debug) printf("AND A, B\n");
+                   A = A & B;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; SETF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xA1: // AND A, C    b1 c4 flags:Z010
-           if (debug) printf("AND A, C\n");
-           A = A & C;
-           if (A == 0) SETF_Z; else CLRF_Z;
-           CLRF_N; SETF_H; CLRF_C;
-           PC += 1;
-           return 4;
+                   if (debug) printf("AND A, C\n");
+                   A = A & C;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; SETF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xA2: // AND A, D    b1 c4 flags:Z010
-           if (debug) printf("AND A, D\n");
-           A = A & D;
-           if (A == 0) SETF_Z; else CLRF_Z;
-           CLRF_N; SETF_H; CLRF_C;
-           PC += 1;
-           return 4;
+                   if (debug) printf("AND A, D\n");
+                   A = A & D;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; SETF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xA3: // AND A, E    b1 c4 flags:Z010
-           if (debug) printf("AND A, E\n");
-           A = A & E;
-           if (A == 0) SETF_Z; else CLRF_Z;
-           CLRF_N; SETF_H; CLRF_C;
-           PC += 1;
-           return 4;
+                   if (debug) printf("AND A, E\n");
+                   A = A & E;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; SETF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xA4: // AND A, H    b1 c4 flags:Z010
-           if (debug) printf("AND A, H\n");
-           A = A & H;
-           if (A == 0) SETF_Z; else CLRF_Z;
-           CLRF_N; SETF_H; CLRF_C;
-           PC += 1;
-           return 4;
+                   if (debug) printf("AND A, H\n");
+                   A = A & H;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; SETF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xA5: // AND A, L    b1 c4 flags:Z010
-           if (debug) printf("AND A, L\n");
-           A = A & L;
-           if (A == 0) SETF_Z; else CLRF_Z;
-           CLRF_N; SETF_H; CLRF_C;
-           PC += 1;
-           return 4;
+                   if (debug) printf("AND A, L\n");
+                   A = A & L;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; SETF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xA6: // AND A, [HL]    b1 c8 flags:Z010
                    n8 = rom[HL];
                    if (debug) printf("AND A, [HL]\n");
@@ -1420,176 +1505,177 @@ int cpu_step(void) {
                    PC += 1;
                    return 8;
         case 0xA7: // AND A, A    b1 c4 flags:Z010
-           if (debug) printf("AND A, A\n");
-           if (A == 0) SETF_Z; else CLRF_Z;
-           CLRF_N; SETF_H; CLRF_C;
-           PC += 1;
-           return 4;
+                   if (debug) printf("AND A, A\n");
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; SETF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xA8: // XOR A, B    b1 c4 flags:Z000
-            if (debug) printf("XOR A, B\n");
-            A = A ^ B;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N; CLRF_H; CLRF_C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("XOR A, B\n");
+                   A = A ^ B;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xA9: // XOR A, C    b1 c4 flags:Z000
-            if (debug) printf("XOR A, C\n");
-            A = A ^ C;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N; CLRF_H; CLRF_C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("XOR A, C\n");
+                   A = A ^ C;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xAA: // XOR A, D    b1 c4 flags:Z000
-            if (debug) printf("XOR A, D\n");
-            A = A ^ D;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N; CLRF_H; CLRF_C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("XOR A, D\n");
+                   A = A ^ D;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xAB: // XOR A, E    b1 c4 flags:Z000
-            if (debug) printf("XOR A, E\n");
-            A = A ^ E;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N; CLRF_H; CLRF_C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("XOR A, E\n");
+                   A = A ^ E;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xAC: // XOR A, H    b1 c4 flags:Z000
-            if (debug) printf("XOR A, H\n");
-            A = A ^ H;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N; CLRF_H; CLRF_C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("XOR A, H\n");
+                   A = A ^ H;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xAD: // XOR A, L    b1 c4 flags:Z000
-            if (debug) printf("XOR A, L\n");
-            A = A ^ L;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N; CLRF_H; CLRF_C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("XOR A, L\n");
+                   A = A ^ L;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xAE: // XOR A, [HL]    b1 c8 flags:Z000
-            if (debug) printf("XOR A, [HL]\n");
-            A = A ^ rom[HL];
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N; CLRF_H; CLRF_C;
-            PC += 1;
-            return 8;
+                   if (debug) printf("XOR A, [HL]\n");
+                   A = A ^ rom[HL];
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 8;
         case 0xAF: // XOR A, A    b1 c4 flags:1000
-            A = 0;
-            SETF_Z;
-            CLRF_N;
-            CLRF_H;
-            CLRF_C;
-            if (debug) printf("XOR A, A\n");
-            PC += 1;
-            return 4;
+                   A = 0;
+                   SETF_Z;
+                   CLRF_N;
+                   CLRF_H;
+                   CLRF_C;
+                   if (debug) printf("XOR A, A\n");
+                   PC += 1;
+                   return 4;
         case 0xB0: // OR A, B   b1 c4 flags:Z000
-            if (debug) printf("OR A, B\n");
-            A = A | B;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N; CLRF_H; CLRF_C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("OR A, B\n");
+                   A = A | B;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xB1: // OR A, C    b1 c4 flags:Z000
-            if (debug) printf("OR A, C\n");
-            A = A | C;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N;
-            CLRF_H;
-            CLRF_C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("OR A, C\n");
+                   A = A | C;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   CLRF_H;
+                   CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xB2: // OR A, D   b1 c4 flags:Z000
-            if (debug) printf("OR A, D\n");
-            A = A | D;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N; CLRF_H; CLRF_C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("OR A, D\n");
+                   A = A | D;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xB3: // OR A, E   b1 c4 flags:Z000
-            if (debug) printf("OR A, E\n");
-            A = A | E;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N; CLRF_H; CLRF_C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("OR A, E\n");
+                   A = A | E;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xB4: // OR A, H   b1 c4 flags:Z000
-            if (debug) printf("OR A, H\n");
-            A = A | H;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N; CLRF_H; CLRF_C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("OR A, H\n");
+                   A = A | H;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xB5: // OR A, L   b1 c4 flags:Z000
-            if (debug) printf("OR A, L\n");
-            A = A | L;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N; CLRF_H; CLRF_C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("OR A, L\n");
+                   A = A | L;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xB6: // OR A, [HL]    b1 c8 flags:Z000
-            if (debug) printf("OR A, [HL]\n");
-            A = A | rom[HL];
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N; CLRF_H; CLRF_C;
-            PC += 1;
-            return 8;
+                   if (debug) printf("OR A, [HL]\n");
+                   A = A | rom[HL];
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 8;
         case 0xB7: // OR A, A    b1 c4 flags:Z000
-            if (debug) printf("OR A, A\n");
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N; CLRF_H; CLRF_C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("OR A, A\n");
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xB8: // CP A, B    b1 c4 flags:Z1HC
-            if (debug) printf("CP A, B\n");
-            if (A == B) SETF_Z; else CLRF_Z;
-            SETF_N;
-            if ((A & 0x0F) < (B & 0x0F)) SETF_H; else CLRF_H;
-            if (A < B) SETF_C; else CLRF_C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("CP A, B\n");
+                   if (A == B) SETF_Z; else CLRF_Z;
+                   SETF_N;
+                   if ((A & 0x0F) < (B & 0x0F)) SETF_H; else CLRF_H;
+                   if (A < B) SETF_C; else CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xB9: // CP A, C    b1 c4 flags:Z1HC
-            if (debug) printf("CP A, C\n");
-            if (A == C) SETF_Z; else CLRF_Z;
-            SETF_N;
-            if ((A & 0x0F) < (C & 0x0F)) SETF_H; else CLRF_H;
-            if (A < C) SETF_C; else CLRF_C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("CP A, C\n");
+                   if (A == C) SETF_Z; else CLRF_Z;
+                   SETF_N;
+                   if ((A & 0x0F) < (C & 0x0F)) SETF_H; else CLRF_H;
+                   if (A < C) SETF_C; else CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xBA: // CP A, D    b1 c4 flags:Z1HC
-            if (debug) printf("CP A, D\n");
-            if (A == D) SETF_Z; else CLRF_Z;
-            SETF_N;
-            if ((A & 0x0F) < (D & 0x0F)) SETF_H; else CLRF_H;
-            if (A < D) SETF_C; else CLRF_C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("CP A, D\n");
+                   if (A == D) SETF_Z; else CLRF_Z;
+                   SETF_N;
+                   if ((A & 0x0F) < (D & 0x0F)) SETF_H; else CLRF_H;
+                   if (A < D) SETF_C; else CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xBB: // CP A, E    b1 c4 flags:Z1HC
-            if (debug) printf("CP A, E\n");
-            if (A == E) SETF_Z; else CLRF_Z;
-            SETF_N;
-            if ((A & 0x0F) < (E & 0x0F)) SETF_H; else CLRF_H;
-            if (A < E) SETF_C; else CLRF_C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("CP A, E\n");
+                   if (A == E) SETF_Z; else CLRF_Z;
+                   SETF_N;
+                   if ((A & 0x0F) < (E & 0x0F)) SETF_H; else CLRF_H;
+                   if (A < E) SETF_C; else CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xBC: // CP A, H    b1 c4 flags:Z1HC
-            if (debug) printf("CP A, H\n");
-            if (A == H) SETF_Z; else CLRF_Z;
-            SETF_N;
-            if ((A & 0x0F) < (H & 0x0F)) SETF_H; else CLRF_H;
-            if (A < H) SETF_C; else CLRF_C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("CP A, H\n");
+                   if (A == H) SETF_Z; else CLRF_Z;
+                   SETF_N;
+                   if ((A & 0x0F) < (H & 0x0F)) SETF_H; else CLRF_H;
+                   if (A < H) SETF_C; else CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xBD: // CP A, L    b1 c4 flags:Z1HC
-            if (debug) printf("CP A, L\n");
-            if (A == L) SETF_Z; else CLRF_Z;
-            SETF_N;
-            if ((A & 0x0F) < (L & 0x0F)) SETF_H; else CLRF_H;
-            if (A < L) SETF_C; else CLRF_C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("CP A, L\n");
+                   if (A == L) SETF_Z; else CLRF_Z;
+                   SETF_N;
+                   if ((A & 0x0F) < (L & 0x0F)) SETF_H; else CLRF_H;
+                   if (A < L) SETF_C; else CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xBE: // CP A, [HL]    b1 c8 flags:Z1HC
                    n8 = rom[HL];
+                   if (debug) printf("CP A, [HL]\n");
                    if (n8 == A) SETF_Z; else CLRF_Z;
                    SETF_N;
                    if ((n8 & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
@@ -1597,69 +1683,70 @@ int cpu_step(void) {
                    PC += 1;
                    return 8;
         case 0xBF: // CP A, A    b1 c4 flags:1100
-            if (debug) printf("CP A, A\n");
-            SETF_Z; SETF_N;
-            CLRF_H; CLRF_C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("CP A, A\n");
+                   SETF_Z; SETF_N;
+                   CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
         case 0xC0: // RET NZ b1 c20, 8 flags:----
-            if (debug) printf("RET NZ\n");
-            if (!READF_Z) {
-                uint8_t low5 = rom[SP];
-                uint8_t high5 = rom[SP + 1];
-                SP += 2;
-                PC = (high5 << 8) | low5;
-                return 20;
-            }
-            PC += 1;
-            return 8;
+                   if (debug) printf("RET NZ\n");
+                   if (!READF_Z) {
+                       uint8_t low5 = rom[SP];
+                       uint8_t high5 = rom[SP + 1];
+                       SP += 2;
+                       PC = (high5 << 8) | low5;
+                       return 20;
+                   }
+                   PC += 1;
+                   return 8;
         case 0xC1: // POP BC    b1 c12 flags:----
-            C = rom[SP];
-            B = rom[SP + 1];
-            SP += 2;
-            PC += 1;
-            return 12;
+                   if (debug) printf("POP BC\n");
+                   C = rom[SP];
+                   B = rom[SP + 1];
+                   SP += 2;
+                   PC += 1;
+                   return 12;
         case 0xC2: // JP NZ <a16>    b3 c16,12 flags:----
-            a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
-            if (debug) printf("JP NZ 0x%04X", a16);
-            if (!READF_Z) {
-                PC = a16;
-                return 16;
-            }
-            PC += 3;
-            return 12;
+                   a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
+                   if (debug) printf("JP NZ 0x%04X\n", a16);
+                   if (!READF_Z) {
+                       PC = a16;
+                       return 16;
+                   }
+                   PC += 3;
+                   return 12;
         case 0xC3: // JP <a16>    b3 c16 flags:----
-            a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
-            if (debug) printf("JP 0x%04X\n", a16);
-            PC = a16; 
-            return 16;
+                   a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
+                   if (debug) printf("JP 0x%04X\n", a16);
+                   PC = a16; 
+                   return 16;
         case 0xC4: // CALL NZ, <a16>    b3 c24,12 flags:----
-            a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
-            if (debug) printf("CALL NZ, 0x%04X\n", a16);
-            if (!READF_Z) {
-                SP -= 2;
-                mem_write16(SP, PC + 3);
-                PC = a16;
-                return 24;
-            }
-            PC += 3;
-            return 12;
+                   a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
+                   if (debug) printf("CALL NZ, 0x%04X\n", a16);
+                   if (!READF_Z) {
+                       SP -= 2;
+                       mem_write16(SP, PC + 3);
+                       PC = a16;
+                       return 24;
+                   }
+                   PC += 3;
+                   return 12;
         case 0xC5: // PUSH BC b1 c16 flags:----
-            if (debug) printf("PUSH BC\n");
-            SP -= 2;
-            mem_write16(SP, BC);
-            PC += 1;
-            return 16;
+                   if (debug) printf("PUSH BC\n");
+                   SP -= 2;
+                   mem_write16(SP, BC);
+                   PC += 1;
+                   return 16;
         case 0xC6: // ADD A, <n8>    b2 c8 flags:Z0HC
-            n8 = rom[PC + 1];
-            if (debug) printf("ADD A, 0x%02X\n", n8);
-            if (A + n8 > 0xFF) SETF_C; else CLRF_C;
-            if ( (A & 0x0F) + (n8 & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
-            A += n8;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N;
-            PC += 2;
-            return 8;
+                   n8 = rom[PC + 1];
+                   if (debug) printf("ADD A, 0x%02X\n", n8);
+                   if (A + n8 > 0xFF) SETF_C; else CLRF_C;
+                   if ( (A & 0x0F) + (n8 & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+                   A += n8;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   PC += 2;
+                   return 8;
         case 0xC7: // RST $00    b1 c16 flags:----
                    if (debug) printf("RST $00\n");
                    SP -= 2;
@@ -1667,33 +1754,33 @@ int cpu_step(void) {
                    PC = 0x0000;
                    return 16;
         case 0xC8: // RET Z b1 c20, 8 flags:----
-            if (debug) printf("RET Z\n");
-            if (READF_Z) {
-                uint8_t low5 = rom[SP];
-                uint8_t high5 = rom[SP + 1];
-                SP += 2;
-                PC = (high5 << 8) | low5;
-                return 20;
-            }
-            PC += 1;
-            return 8;
+                   if (debug) printf("RET Z\n");
+                   if (READF_Z) {
+                       uint8_t low5 = rom[SP];
+                       uint8_t high5 = rom[SP + 1];
+                       SP += 2;
+                       PC = (high5 << 8) | low5;
+                       return 20;
+                   }
+                   PC += 1;
+                   return 8;
         case 0xC9: // RET b1 c16 flags:----
-            if (debug) printf("RET \n");
-            {}
-            uint8_t low = rom[SP];
-            uint8_t high = rom[SP + 1];
-            SP += 2;
-            PC= (high << 8) | low;
-            return 16;
+                   if (debug) printf("RET \n");
+                   {}
+                   uint8_t low = rom[SP];
+                   uint8_t high = rom[SP + 1];
+                   SP += 2;
+                   PC= (high << 8) | low;
+                   return 16;
         case 0xCA: // JP Z <a16>    b3 c16,12 flags:----
-            a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
-            if (debug) printf("JP Z 0x%04X", a16);
-            if (READF_Z) {
-                PC = a16;
-                return 16;
-            }
-            PC += 3;
-            return 12;
+                   a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
+                   if (debug) printf("JP Z 0x%04X\n", a16);
+                   if (READF_Z) {
+                       PC = a16;
+                       return 16;
+                   }
+                   PC += 3;
+                   return 12;
         case 0xCB: { // PREFIX b1 c4 flags:----
                        uint8_t cb_op = rom[PC + 1];
                        if (debug) printf("CB %02X: ", cb_op);
@@ -1811,16 +1898,16 @@ int cpu_step(void) {
                        return cycles;
                    }
         case 0xCC: // CALL Z, <a16>    b3 c24,12 flags:----
-            a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
-            if (debug) printf("CALL Z, 0x%04X\n", a16);
-            if (READF_Z) {
-                SP -= 2;
-                mem_write16(SP, PC + 3);
-                PC = a16;
-                return 24;
-            }
-            PC += 3;
-            return 12;
+                   a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
+                   if (debug) printf("CALL Z, 0x%04X\n", a16);
+                   if (READF_Z) {
+                       SP -= 2;
+                       mem_write16(SP, PC + 3);
+                       PC = a16;
+                       return 24;
+                   }
+                   PC += 3;
+                   return 12;
         case 0xCD: // CALL <a16>    b3 c24 flags:----
                    a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
                    if (debug) printf("CALL 0x%04X\n", a16);
@@ -1866,25 +1953,25 @@ int cpu_step(void) {
                    PC += 1;
                    return 12;
         case 0xD2: // JP NC <a16>    b3 c16,12 flags:----
-            a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
-            if (debug) printf("JP NC 0x%04X", a16);
-            if (!READF_C) {
-                PC = a16;
-                return 16;
-            }
-            PC += 3;
-            return 12;
+                   a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
+                   if (debug) printf("JP NC 0x%04X\n", a16);
+                   if (!READF_C) {
+                       PC = a16;
+                       return 16;
+                   }
+                   PC += 3;
+                   return 12;
         case 0xD4: // CALL NC, <a16>    b3 c24,12 flags:----
-            a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
-            if (debug) printf("CALL NC, 0x%04X\n", a16);
-            if (!READF_C) {
-                SP -= 2;
-                mem_write16(SP, PC + 3);
-                PC = a16;
-                return 24;
-            }
-            PC += 3;
-            return 12;
+                   a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
+                   if (debug) printf("CALL NC, 0x%04X\n", a16);
+                   if (!READF_C) {
+                       SP -= 2;
+                       mem_write16(SP, PC + 3);
+                       PC = a16;
+                       return 24;
+                   }
+                   PC += 3;
+                   return 12;
         case 0xD5: // PUSH DE    b1 c16 flags:----
                    if (debug) printf("PUSH DE\n");
                    SP -= 2;
@@ -1919,46 +2006,46 @@ int cpu_step(void) {
                    PC += 1;
                    return 8;
         case 0xD9: // RETI    b1 c16 flags:----
-            if (debug) printf("RET \n");
-            {
-            uint8_t low = rom[SP];
-            uint8_t high = rom[SP + 1];
-            ime_scheduled = true;
-            SP += 2;
-            PC = (high << 8) | low;
-            }
-            return 16;
+                   if (debug) printf("RET \n");
+                   {
+                       uint8_t low = rom[SP];
+                       uint8_t high = rom[SP + 1];
+                       ime_scheduled = true;
+                       SP += 2;
+                       PC = (high << 8) | low;
+                   }
+                   return 16;
         case 0xDA: // JP C <a16>    b3 c16,12 flags:----
-            a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
-            if (debug) printf("JP C 0x%04X", a16);
-            if (READF_C) {
-                PC = a16;
-                return 16;
-            }
-            PC += 3;
-            return 12;
+                   a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
+                   if (debug) printf("JP C 0x%04X\n", a16);
+                   if (READF_C) {
+                       PC = a16;
+                       return 16;
+                   }
+                   PC += 3;
+                   return 12;
         case 0xDC: // CALL C, <a16>    b3 c24,12 flags:----
-            a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
-            if (debug) printf("CALL C, 0x%04X\n", a16);
-            if (READF_C) {
-                SP -= 2;
-                mem_write16(SP, PC + 3);
-                PC = a16;
-                return 24;
-            }
-            PC += 3;
-            return 12;
+                   a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
+                   if (debug) printf("CALL C, 0x%04X\n", a16);
+                   if (READF_C) {
+                       SP -= 2;
+                       mem_write16(SP, PC + 3);
+                       PC = a16;
+                       return 24;
+                   }
+                   PC += 3;
+                   return 12;
         case 0xDE: // SBC A, <n8>    b2 c8 flags:Z1HC
                    n8 = rom[PC + 1];
                    {
-                   if (debug) printf("SBC A, 0x%02X\n", n8);
-                   uint8_t carry = READF_C ? 1 : 0;
-                   if (n8 + carry > A) SETF_C; else CLRF_C;
-                   if ((n8 & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
-                   A = A - n8 - carry;
-                   if (A == 0) SETF_Z; else CLRF_Z;
-                   SETF_N;
-                   PC += 2;
+                       if (debug) printf("SBC A, 0x%02X\n", n8);
+                       uint8_t carry = READF_C ? 1 : 0;
+                       if (n8 + carry > A) SETF_C; else CLRF_C;
+                       if ((n8 & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+                       A = A - n8 - carry;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       SETF_N;
+                       PC += 2;
                    }
                    return 8;
         case 0xDF: // RST $18    b1 c16 flags:----
@@ -1976,6 +2063,7 @@ int cpu_step(void) {
                    return 12;
         case 0xE1: // POP HL    b1 c12 flags:----
                    {}
+                   if (debug) printf("POP HL\n");
                    uint8_t low1 = rom[SP];
                    uint8_t high1 = rom[SP + 1];
                    SP += 2;
@@ -2049,10 +2137,16 @@ int cpu_step(void) {
                    mem_write16(SP, PC + 1); 
                    PC = 0x0028;
                    return 16;
-        case 0xF0: // LDH A, <a8>    b2 c12 flags:----
+
+        case 0xF0: // LDH A, <a8>
                    a8 = rom[PC + 1];
-                   A = rom[0xFF00 + a8];
-                   if (debug) printf("LDH A, 0x%04X\n", (0xFF00 + a8));
+                   if (a8 == 0x00) {
+                       // Joypad register - return 0xF in lower nibble (no buttons pressed)
+                       A = (rom[0xFF00] & 0xF0) | 0x0F;
+                   } else {
+                       A = rom[0xFF00 + a8];
+                   }
+                   if (debug) printf("LDH A, 0x%02X\n", a8);
                    PC += 2;
                    return 12;
         case 0xF1: // POP AF    b1 c12 flags:ZNHC
@@ -2133,6 +2227,9 @@ int cpu_step(void) {
                    return 4;
         case 0xFE: // CP A, <n8>    b2 c8 flags:Z1HC
                    n8 = rom[PC + 1];
+                   if (n8 == 0x94) {
+                   }
+                   if (debug) printf("CP A, 0x%02X\n", n8);
                    if (n8 == A) SETF_Z; else CLRF_Z;
                    SETF_N;
                    if ((n8 & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
@@ -2150,7 +2247,6 @@ int cpu_step(void) {
                    exit(1);
 
     }
-    if (debug) show_registers();
 }
 
 void inc_reg16(uint8_t *low, uint8_t *high) {
@@ -2629,49 +2725,49 @@ void timer_step(int cycles) {
 
 void handle_interrupts(void) {
 
-            uint8_t IE = rom[0xFFFF]; //interrupt enable flag
-            uint8_t IF = rom[0xFF0F]; //interrupt flag
-            if ((IE & IF & 0b00000001) == 0b00000001) {
-                // VBlank
-                IME = false;
-                rom[0xFF0F] = (IF & 0b11111110);
-                SP -= 2;
-                mem_write16(SP, PC);
-                PC = 0x40;
-                if (debug) printf("<VBlank Interrupt>\n");
-            } else if ((IE & IF & 0b00000010) == 0b00000010) {
-                // LCD
-                IME = false;
-                rom[0xFF0F] = (IF & 0b11111101);
-                SP -= 2;
-                mem_write16(SP, PC);
-                PC = 0x48;
-                if (debug) printf("<STAT Interrupt>\n");
-            } else if ((IE & IF & 0b00000100) == 0b00000100) {
-                // Timer
-                IME = false;
-                rom[0xFF0F] = (IF & 0b11111011);
-                SP -= 2;
-                mem_write16(SP, PC);
-                PC = 0x50;
-                if (debug) printf("<Timer Interrupt>\n");
-            } else if ((IE & IF & 0b00001000) == 0b00001000) {
-                // serial
-                IME = false;
-                rom[0xFF0F] = (IF & 0b11110111);
-                SP -= 2;
-                mem_write16(SP, PC);
-                PC = 0x58;
-                if (debug) printf("<Serial Interrupt>\n");
-            } else if ((IE & IF & 0b00010000) == 0b00010000) {
-                //Joypad
-                IME = false;
-                rom[0xFF0F] = (IF & 0b11101111);
-                SP -= 2;
-                mem_write16(SP, PC);
-                PC = 0x60;
-                if (debug) printf("<Joypad Interrupt>\n");
-            }
+    uint8_t IE = rom[0xFFFF]; //interrupt enable flag
+    uint8_t IF = rom[0xFF0F]; //interrupt flag
+    if ((IE & IF & 0b00000001) == 0b00000001) {
+        // VBlank
+        IME = false;
+        rom[0xFF0F] = (IF & 0b11111110);
+        SP -= 2;
+        mem_write16(SP, PC);
+        PC = 0x40;
+        if (debug) printf("<VBlank Interrupt>\n");
+    } else if ((IE & IF & 0b00000010) == 0b00000010) {
+        // LCD
+        IME = false;
+        rom[0xFF0F] = (IF & 0b11111101);
+        SP -= 2;
+        mem_write16(SP, PC);
+        PC = 0x48;
+        if (debug) printf("<STAT Interrupt>\n");
+    } else if ((IE & IF & 0b00000100) == 0b00000100) {
+        // Timer
+        IME = false;
+        rom[0xFF0F] = (IF & 0b11111011);
+        SP -= 2;
+        mem_write16(SP, PC);
+        PC = 0x50;
+        if (debug) printf("<Timer Interrupt>\n");
+    } else if ((IE & IF & 0b00001000) == 0b00001000) {
+        // serial
+        IME = false;
+        rom[0xFF0F] = (IF & 0b11110111);
+        SP -= 2;
+        mem_write16(SP, PC);
+        PC = 0x58;
+        if (debug) printf("<Serial Interrupt>\n");
+    } else if ((IE & IF & 0b00010000) == 0b00010000) {
+        //Joypad
+        IME = false;
+        rom[0xFF0F] = (IF & 0b11101111);
+        SP -= 2;
+        mem_write16(SP, PC);
+        PC = 0x60;
+        if (debug) printf("<Joypad Interrupt>\n");
+    }
 }
 // Source - https://stackoverflow.com/a
 // Posted by caf, modified by community. See post 'Timeline' for change history
