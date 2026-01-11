@@ -64,6 +64,9 @@ uint8_t rom[2000000];
 bool IME = false;           // Interrupt Master Enable flag (write only) IME is unset (interrupts are disabled) when the game starts running.
 bool ime_scheduled = false; 
 
+uint8_t *IE = &rom[0xFFFF]; //interrupt enable flag
+uint8_t *IF = &rom[0xFF0F]; //interrupt flag
+
 uint8_t A = 0;  // A
 uint8_t F = 0; // Flags register (can't be accesed directly)
 uint8_t B = 0; //BC high
@@ -214,30 +217,73 @@ void ppu_steps(int cycles) {
 void ppu_step() {
     dots++; 
     
+    static struct sprite intersecting_sprites[40];
+    static int inter_sprite_len = 0;
+
     if (dots > 0 && dots <= 80) {
         // mode 2 - OAM scan
         // duration: 80 dots
-        // description: Searching for OBJs which overlap this line
+        // description: Searching for OBJs which overlap this line (OAM inaccessible)
+        // plan: Scan the 40 OAM entries to find which intersect with the current line
+        // Object attributes reside in the object attribute memory (OAM) at $FE00-FE9F.
+        // Each of the 40 entries consists of four bytes
+        // we can do all the work on dot 1 and then wait
+        // Object’s vertical position on the screen + 16
+        *STAT = (*STAT & 0b11111100) | 0b10;  // Mode 2
+        if (dots == 1) {
+        inter_sprite_len = 0;
+            int height = (*LCDC & 0x04) ? 16 : 8;
+
+            for (int i = 0; i < 40; i++) {
+                struct sprite object = { 
+                    rom[0xFE00 + i * 4],
+                    rom[0xFE00 + i * 4 + 1],
+                    rom[0xFE00 + i * 4 + 2],
+                    rom[0xFE00 + i * 4 + 3]
+                };
+            
+                // determine intersection with LY
+                int screen_y = object.y - 16;
+                if (*LY >= screen_y && *LY < screen_y + height) {
+                    intersecting_sprites[inter_sprite_len++] = object;
+                    printf("Intersecting  object found for line %d\n", *LY);
+                }
+            }
+        }
+
     } else if (dots > 80 && dots <= 456) {
         // mode 3 - Drawing Pixels
         // duration: between 172 and 289
-        // description: Sending pixels to the LCD
-
+        // description: Sending pixels to the LCD (VRAM inaccessible)
+        *STAT = (*STAT & 0b11111100) | 0b11;  // Mode 3
         // mode 0 - Horizontal Blank
         // duration: 376 - mode 3’s duration
         // description: Waiting until the end of the scanline
-    } else {
+
+
+        //artificial mode change for testing
+        if (dots > 80 + 172) {
+          *STAT = (*STAT & 0b11111100) | 0b00;  // Mode 0
+        }
+    } else if (*LY >= 144) {
         // mode 1 - Vertical Blank
         // duration: 4560 dots (10 scanlines)
         // description: Waiting until the next frame
+        *STAT = (*STAT & 0b11111100) | 0b01;  // Mode 1
     }
      
-    if (dots == 70224) { // full frame processed (including VBlank)
-        *LY = 0;
-        dots = 0;
-    } else if (dots % 456 == 0) { //1 scanline rendered
-        (*LY)++;
+    if (dots == 456) {
+    dots = 0;
+    (*LY)++;
+
+    if (*LY == 144) {
+        *IF |= 0x01;  // Request VBlank interrupt!
     }
+
+    if (*LY > 153) {
+        *LY = 0;
+    }
+}
 }
 
 /*
@@ -1008,25 +1054,19 @@ int cpu_step(void) {
                    printf("HALT: IME=%d IE=%02X IF=%02X\n", IME, rom[0xFFFF], rom[0xFF0F]);
                    exit(1);
                    {
-                       uint8_t IE = rom[0xFFFF];
-                       uint8_t IF = rom[0xFF0F];
 
                        if (IME) {
                            // IME set: wait for interrupt, handler will be called
-                           while ((IE & IF & 0x1F) == 0) {
+                           while ((*IE & *IF & 0x1F) == 0) {
                                timer_step(4);
                                ppu_steps(4);
-                               IE = rom[0xFFFF];
-                               IF = rom[0xFF0F];
                            }
                            PC += 1;
-                       } else if ((IE & IF & 0x1F) == 0) {
+                       } else if ((*IE & *IF & 0x1F) == 0) {
                            // IME not set, no interrupt pending: wait, but handler won't be called
-                           while ((IE & IF & 0x1F) == 0) {
+                           while ((*IE & *IF & 0x1F) == 0) {
                                timer_step(4);
                                ppu_steps(4);
-                               IE = rom[0xFFFF];
-                               IF = rom[0xFF0F];
                            }
                            PC += 1;
                        } else {
@@ -2692,44 +2732,43 @@ void timer_step(int cycles) {
 
 void handle_interrupts(void) {
 
-    uint8_t IE = rom[0xFFFF]; //interrupt enable flag
-    uint8_t IF = rom[0xFF0F]; //interrupt flag
-    if ((IE & IF & 0b00000001) == 0b00000001) {
+    if ((*IE & *IF & 0b00000001) == 0b00000001) {
+
         // VBlank
         IME = false;
-        rom[0xFF0F] = (IF & 0b11111110);
+        *IF = (*IF & 0b11111110);
         SP -= 2;
         mem_write16(SP, PC);
         PC = 0x40;
         if (debug) printf("<VBlank Interrupt>\n");
-    } else if ((IE & IF & 0b00000010) == 0b00000010) {
+    } else if ((*IE & *IF & 0b00000010) == 0b00000010) {
         // LCD
         IME = false;
-        rom[0xFF0F] = (IF & 0b11111101);
+        *IF = (*IF & 0b11111101);
         SP -= 2;
         mem_write16(SP, PC);
         PC = 0x48;
         if (debug) printf("<STAT Interrupt>\n");
-    } else if ((IE & IF & 0b00000100) == 0b00000100) {
+    } else if ((*IE & *IF & 0b00000100) == 0b00000100) {
         // Timer
         IME = false;
-        rom[0xFF0F] = (IF & 0b11111011);
+        *IF =  (*IF & 0b11111011);
         SP -= 2;
         mem_write16(SP, PC);
         PC = 0x50;
         if (debug) printf("<Timer Interrupt>\n");
-    } else if ((IE & IF & 0b00001000) == 0b00001000) {
+    } else if ((*IE & *IF & 0b00001000) == 0b00001000) {
         // serial
         IME = false;
-        rom[0xFF0F] = (IF & 0b11110111);
+        *IF = (*IF & 0b11110111);
         SP -= 2;
         mem_write16(SP, PC);
         PC = 0x58;
         if (debug) printf("<Serial Interrupt>\n");
-    } else if ((IE & IF & 0b00010000) == 0b00010000) {
+    } else if ((*IE & *IF & 0b00010000) == 0b00010000) {
         //Joypad
         IME = false;
-        rom[0xFF0F] = (IF & 0b11101111);
+        *IF = (*IF & 0b11101111);
         SP -= 2;
         mem_write16(SP, PC);
         PC = 0x60;
