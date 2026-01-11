@@ -29,7 +29,8 @@
 #define READF_C ((F & 0b00010000) != 0)
 
 int cpu_step(void);
-int ppu_step(int cycles);
+void ppu_steps(int cycles);
+void ppu_step();
 void show_registers(void);
 void show_cartridge_info();
 void mem_write8(uint16_t addr, uint8_t b);
@@ -38,6 +39,7 @@ void dec_reg16(uint8_t *low, uint8_t *high);
 void inc_reg16(uint8_t *low, uint8_t *high);
 void timer_step(int cycles);
 void handle_interrupts(void);
+uint8_t *get_tile(int index);
 
 bool debug = false;
 bool sdl_render = true;
@@ -53,6 +55,9 @@ uint32_t palette[4] = {
     0xFF081820   // Darkest (color 3) - black/dark green
 };
 bool scanline_rendered = false;
+struct sprite {
+    uint8_t y, x, tile, flags;
+};
 bool frame_presented = false;
 uint8_t rom[2000000];
 
@@ -76,7 +81,7 @@ uint16_t PC = 0x0100;
 //              1 = use $9C00-$9FFF
 // LCDC bit 6: Window map tile selection (same as above)
 uint8_t *LCDC = &rom[0xFF40];
-int ppu_dots = 0;
+int dots = 0;
 // LCD Y coordinate (read-only)
 //  LY can hold any value from 0 to 153, with values from 144 to 153 indicating the VBlank period.
 uint8_t *LY = &rom[0xFF44];
@@ -168,11 +173,9 @@ int main(int argc, char **argv) {
         if (IME == true) {
             handle_interrupts();
         }
-
-        ppu_step(cycles);
+        ppu_steps(cycles);
 
         frame_cycles += cycles;
-
         if (frame_cycles >= CYCLES_PER_FRAME) {
             frame_cycles -= CYCLES_PER_FRAME;
 
@@ -192,93 +195,65 @@ int main(int argc, char **argv) {
 
     return EXIT_SUCCESS;
 }
+/*
+ Game Boy resolution: 160x144
+ A "dot" = 222 Hz (≅ 4.194 MHz) time unit. 4 dots / M-cycle
+ A frame consists of 154 scanlines; during the first 144, the screen is drawn top to bottom, left to right.
 
-// 160x144
-// GB has three layers: the Background, the Window and the Objects
-//
-// TILE: pixels grouped in 8x8 squares. The base unit in GB graphics
-//       a tile assigns a color index to each of its pixels from 0 to 3 (2 bits)
-//       Tile data is stored in VRAM 0x8000 - 0x97FF so we can store up to 384 tiles.:
-//              (6143 bytes / (64 bits * 2 / 8) = 384
-//
-// OBJECT: 1 or 2 stacked tiles (8x8 or 8x16) that can be displayed anywhere on the screen
-//
-// Mode order: 2 -> 3 -> 0 (loop until frame complete) -> 1 
-int ppu_step(int cycles) {
-    static int frame_count = 0;
-    if (*LY == 0 && ppu_dots < 10) {
-        frame_count++;
+ The cpu_step cycles are given as an argument, in order to know
+ how many ticks to advance the PPU, as both units work in sync
+ with a system clock.
+ */
+
+void ppu_steps(int cycles) {
+    for (int i = 0; i < cycles; i++) {
+        ppu_step();
     }
-
-    ppu_dots += cycles;
-
-    if (ppu_dots >= 456) {
-        ppu_dots -= 456;
-        (*LY)++;
-        scanline_rendered = false;
-
-        if (*LY > 153) {
-            *LY = 0;
-            frame_presented = false;
-        }
-    }
-    
-    *STAT &= 0xFC;
-    if (*LY >= 144) {
-        // VBlank mode (mode 1)
-        *STAT |= 0x01;
-        if (!frame_presented) {
-            frame_presented = true;
-            rom[0xFF0F] |= 0x01;  // Request VBlank interrupt
-            if (sdl_render) {
-                SDL_UpdateTexture(texture, NULL, framebuffer, 160 * sizeof(uint32_t));
-                SDL_RenderCopy(renderer, texture, NULL, NULL);
-                SDL_RenderPresent(renderer);
-            }
-        }
-    } else if (ppu_dots <= 80) {
-        // OAM scan (mode 2)
-        *STAT |= 0x02;
-    } else if (ppu_dots <= 80 + 172) {
-        // Drawing (mode 3)
-        *STAT |= 0x03;
-        if (!scanline_rendered) {
-            scanline_rendered = true;
-
-            uint16_t bg_tilemap_addr;
-            if ((*LCDC & 0b00001000) == 0) {
-                bg_tilemap_addr = 0x9800;
-            } else {
-                bg_tilemap_addr = 0x9C00;
-            }
-
-            int x = 0;
-            int tile_row = *LY / 8;
-            int row_in_tile = *LY % 8;
-
-            for (int i = 0; i < 20; i++) {
-                uint8_t index = rom[bg_tilemap_addr + (tile_row * 32) + i];
-                uint16_t tile_addr = 0x8000 + (index * 16);
-
-                uint8_t pixels_a = rom[tile_addr + (row_in_tile * 2)];
-                uint8_t pixels_b = rom[tile_addr + (row_in_tile * 2) + 1];
-
-                for (int bit = 7; bit >= 0; bit--) {
-                    int lo = (pixels_a >> bit) & 1;
-                    int hi = (pixels_b >> bit) & 1;
-                    int color_index = (hi << 1) | lo;
-                    framebuffer[*LY * 160 + x] = palette[color_index];
-                    x++;
-                }
-            }
-        }
-    } else {
-        // HBlank (mode 0)
-        *STAT |= 0x00;
-    }
-
-    return 0;
 }
+
+void ppu_step() {
+    dots++; 
+    
+    if (dots > 0 && dots <= 80) {
+        // mode 2 - OAM scan
+        // duration: 80 dots
+        // description: Searching for OBJs which overlap this line
+    } else if (dots > 80 && dots <= 456) {
+        // mode 3 - Drawing Pixels
+        // duration: between 172 and 289
+        // description: Sending pixels to the LCD
+
+        // mode 0 - Horizontal Blank
+        // duration: 376 - mode 3’s duration
+        // description: Waiting until the end of the scanline
+    } else {
+        // mode 1 - Vertical Blank
+        // duration: 4560 dots (10 scanlines)
+        // description: Waiting until the next frame
+    }
+     
+    if (dots == 70224) { // full frame processed (including VBlank)
+        *LY = 0;
+        dots = 0;
+    } else if (dots % 456 == 0) { //1 scanline rendered
+        (*LY)++;
+    }
+}
+
+/*
+ * Tile data is stored in VRAM in the memory area at $8000-$97FF; 
+ * with each tile taking 16 bytes, this area defines data for 384 tiles.
+ */
+uint8_t *get_tile(int index) {
+    if (index * 16 + 0x8000 > 0x97F0) {
+        puts("Invalid Tile index");
+        exit(1);
+    }
+    static uint8_t tile[16];
+    memcpy(&tile, rom + index * 16, 16);
+    return tile;
+}
+
 int cpu_step(void) {
     uint8_t n8 = 0;   // 8-bit integer signed or unsigned
     uint16_t n16 = 0; // 16-bit integer signed or unsigned
@@ -345,8 +320,8 @@ int cpu_step(void) {
         case 0x08: // LD [a16], SP    b3 c20 flags=----
             a16 = rom[PC + 1] | (rom[PC + 2] << 8); 
             if (debug) printf("LD [0x%04X], SP\n", a16);
-            rom[a16] = (SP & 0xFF);
-            rom[a16 + 1] = (SP >> 8);
+            mem_write8(a16, SP & 0xFF);
+            mem_write8(a16 + 1, SP >> 8);
             PC += 3;
             return 20;
         case 0x09: // ADD HL, BC    b1 c8 flags:-0HC
@@ -676,506 +651,508 @@ int cpu_step(void) {
             return 8;
         case 0x34: // INC [HL]    b1 c12 flags:Z0H-
             if (debug) printf("INC [HL]\n");
-            rom[HL] = rom[HL] + 1;
+            mem_write8(HL, rom[HL] + 1);
             if (rom[HL] == 0) SETF_Z; else CLRF_Z;
             CLRF_N;
             if ((rom[HL] & 0x0F) == 0x00) SETF_H; else CLRF_H;
             PC += 1;
             return 12;
-        case 0x35: // DEC [HL]    b1 c12 flags:Z1H-
-            if (debug) printf("DEC [HL]\n");
-            rom[HL] = rom[HL] - 1;
-            if (rom[HL] == 0) SETF_Z; else CLRF_Z;
-            SETF_N;
-            if ((rom[HL] & 0x0F) == 0x0F) SETF_H; else CLRF_H;
-            PC += 1;
-            return 12;
+        case 0x35: {
+                       if (debug) printf("DEC [HL]\n");
+                       uint8_t val = rom[HL] - 1;
+                       mem_write8(HL, val);
+                       if (val == 0) SETF_Z; else CLRF_Z;
+                       SETF_N;
+                       if ((val & 0x0F) == 0x0F) SETF_H; else CLRF_H;
+                       PC += 1;
+                       return 12;
+                   }
         case 0x36: // LD [HL], <n8>    b2 c12 flags:----
-            n8 = rom[PC + 1];
-            if (debug) printf("LD [HL], 0x%02X\n", n8);
-            mem_write8(HL, n8);
-            PC += 2;
-            return 12;
+                   n8 = rom[PC + 1];
+                   if (debug) printf("LD [HL], 0x%02X\n", n8);
+                   mem_write8(HL, n8);
+                   PC += 2;
+                   return 12;
         case 0x38: // JR C, <e8>    b2 c12,8 flags:----
-            e8 = (int8_t)rom[PC + 1];
-            if (debug) printf("JR C, 0x%02X\n", e8);
-            PC += 2;
-            if (READF_C) {
-                PC += e8;
-                return 12;
-            } 
-            return 8;
+                   e8 = (int8_t)rom[PC + 1];
+                   if (debug) printf("JR C, 0x%02X\n", e8);
+                   PC += 2;
+                   if (READF_C) {
+                       PC += e8;
+                       return 12;
+                   } 
+                   return 8;
         case 0x39: // ADD HL, SP    b1 c8 flags:-0HC
-            if (debug) printf("ADD HL, SP\n");
-            {
-                uint16_t hl = HL;
-                uint32_t result = hl + SP;
-                if (result > 0xFFFF) SETF_C; else CLRF_C;
-                if (((hl & 0x0FFF) + (SP & 0x0FFF)) > 0x0FFF) SETF_H; else CLRF_H;
-                CLRF_N;
-                H = (result >> 8) & 0xFF;
-                L = result & 0xFF;
-            }
-            PC += 1;
-            return 8;
+                   if (debug) printf("ADD HL, SP\n");
+                   {
+                       uint16_t hl = HL;
+                       uint32_t result = hl + SP;
+                       if (result > 0xFFFF) SETF_C; else CLRF_C;
+                       if (((hl & 0x0FFF) + (SP & 0x0FFF)) > 0x0FFF) SETF_H; else CLRF_H;
+                       CLRF_N;
+                       H = (result >> 8) & 0xFF;
+                       L = result & 0xFF;
+                   }
+                   PC += 1;
+                   return 8;
         case 0x3A:  // LD A, [HL-]    b1 c8 flags:----
-            if (debug) printf("LD A, [HL-]\n");
-            A = rom[L | (H << 8)];
-            dec_reg16(&L, &H);
-            PC += 1;
-            return 8;
+                   if (debug) printf("LD A, [HL-]\n");
+                   A = rom[L | (H << 8)];
+                   dec_reg16(&L, &H);
+                   PC += 1;
+                   return 8;
         case 0x3B: // DEC SP    b1 c8 flags:----
-            if (debug) printf("DEC SP\n");
-            SP--;
-            PC += 1;
-            return 8;
+                   if (debug) printf("DEC SP\n");
+                   SP--;
+                   PC += 1;
+                   return 8;
         case 0x3C: // INC A    b1 c4 flags:Z0H-
-            if (debug) printf("INC A\n");
-            if ((A & 0x0F) == 0x0F) SETF_H; else CLRF_H;
-            A++;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N;
-            PC += 1;
-            return 4;
+                   if (debug) printf("INC A\n");
+                   if ((A & 0x0F) == 0x0F) SETF_H; else CLRF_H;
+                   A++;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   PC += 1;
+                   return 4;
         case 0x3D:  // DEC A    b1 c4 flags:Z1H-
-            if (debug) printf("DEC A\n");
-            if ((A & 0x0F) == 0x00) SETF_H; else CLRF_H;
-            A--;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            SETF_N;
-            PC += 1;
-            return 4;
+                   if (debug) printf("DEC A\n");
+                   if ((A & 0x0F) == 0x00) SETF_H; else CLRF_H;
+                   A--;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   SETF_N;
+                   PC += 1;
+                   return 4;
         case 0x3E: // LD A, <n8>    b2 c8 flags:----
-            A = rom[PC + 1];
-            if (debug) printf("LD A, 0x%02X\n", rom[PC + 1]);
-            PC += 2;
-            return 8;
+                   A = rom[PC + 1];
+                   if (debug) printf("LD A, 0x%02X\n", rom[PC + 1]);
+                   PC += 2;
+                   return 8;
         case 0x37: // SCF    b1 c4 flags:-001
-            if (debug) printf("SCF\n");
-            CLRF_N; CLRF_H;
-            SETF_C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("SCF\n");
+                   CLRF_N; CLRF_H;
+                   SETF_C;
+                   PC += 1;
+                   return 4;
         case 0x3F: // CCF    b1 c4 flags:-00~C
-            if (debug) printf("CCF\n");
-            if (READF_C) CLRF_C; else SETF_C;
-            CLRF_N; CLRF_H;
-            PC += 1;
-            return 4;
+                   if (debug) printf("CCF\n");
+                   if (READF_C) CLRF_C; else SETF_C;
+                   CLRF_N; CLRF_H;
+                   PC += 1;
+                   return 4;
         case 0x40: // LD B, B    b1, c4 flags:----
-            if (debug) printf("LD B, B\n"); //essentially a NOP
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD B, B\n"); //essentially a NOP
+                   PC += 1;
+                   return 4;
         case 0x41: // LD B, C    b1 c4 flags:----
-            if (debug) printf("LD B, C\n");
-            B = C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD B, C\n");
+                   B = C;
+                   PC += 1;
+                   return 4;
         case 0x42: // LD B, D    b1 c4 flags:----
-            if (debug) printf("LD B, D\n");
-            B = D;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD B, D\n");
+                   B = D;
+                   PC += 1;
+                   return 4;
         case 0x43: // LD B, E    b1 c4 flags:----
-            if (debug) printf("LD B, E\n");
-            B = E;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD B, E\n");
+                   B = E;
+                   PC += 1;
+                   return 4;
         case 0x44: // LD B, H    b1 c4 flags:----
-            if (debug) printf("LD B, H\n");
-            B = H;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD B, H\n");
+                   B = H;
+                   PC += 1;
+                   return 4;
         case 0x45: // LD B, L    b1 c4 flags:----
-            if (debug) printf("LD B, L\n");
-            B = L;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD B, L\n");
+                   B = L;
+                   PC += 1;
+                   return 4;
         case 0x46: // LD B, [HL]    b1 c8 flags:----
-            if (debug) printf("LD B, [HL]\n");
-            B = rom[HL];
-            PC += 1;
-            return 8;
+                   if (debug) printf("LD B, [HL]\n");
+                   B = rom[HL];
+                   PC += 1;
+                   return 8;
         case 0x47: // LD B, A    b1 c4 flags:----
-            if (debug) printf("LD B, A\n");
-            B = A;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD B, A\n");
+                   B = A;
+                   PC += 1;
+                   return 4;
         case 0x48: // LD C, B    b1 c4 flags:----
-            if (debug) printf("LD C, B\n");
-            C = B;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD C, B\n");
+                   C = B;
+                   PC += 1;
+                   return 4;
         case 0x49: // LD C, C    b1 c4 flags:----
-            if (debug) printf("LD C, C\n");
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD C, C\n");
+                   PC += 1;
+                   return 4;
         case 0x4A: // LD C, D    b1 c4 flags:----
-            if (debug) printf("LD C, D\n");
-            C = D;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD C, D\n");
+                   C = D;
+                   PC += 1;
+                   return 4;
         case 0x4B: // LD C, E    b1 c4 flags:----
-            if (debug) printf("LD C, E\n");
-            C = E;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD C, E\n");
+                   C = E;
+                   PC += 1;
+                   return 4;
         case 0x4C: // LD C, H    b1 c4 flags:----
-            if (debug) printf("LD C, H\n");
-            C = H;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD C, H\n");
+                   C = H;
+                   PC += 1;
+                   return 4;
         case 0x4D: // LD C, L    b1 c4 flags:----
-            if (debug) printf("LD C, L\n");
-            C = L;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD C, L\n");
+                   C = L;
+                   PC += 1;
+                   return 4;
         case 0x4E: // LD C, [HL]    b1 c8 flags:----
-            if (debug) printf("LD C, [HL]\n");
-            C = rom[HL];
-            PC += 1;
-            return 8;
+                   if (debug) printf("LD C, [HL]\n");
+                   C = rom[HL];
+                   PC += 1;
+                   return 8;
         case 0x4F: // LD C, A    b1 c4 flags:----
-            if (debug) printf("LD C, A\n");
-            C = A;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD C, A\n");
+                   C = A;
+                   PC += 1;
+                   return 4;
         case 0x50: // LD D, B    b1 c4 flags:----
-            if (debug) printf("LD D, B\n");
-            D = B;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD D, B\n");
+                   D = B;
+                   PC += 1;
+                   return 4;
         case 0x51: // LD D, C    b1 c4 flags:----
-            if (debug) printf("LD D, C\n");
-            D = C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD D, C\n");
+                   D = C;
+                   PC += 1;
+                   return 4;
         case 0x52: // LD D, D    b1 c4 flags:----
-            if (debug) printf("LD D, D\n");
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD D, D\n");
+                   PC += 1;
+                   return 4;
         case 0x53: // LD D, E    b1 c4 flags:----
-            if (debug) printf("LD D, E\n");
-            D = E;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD D, E\n");
+                   D = E;
+                   PC += 1;
+                   return 4;
         case 0x54: // LD D, H    b1 c4 flags:----
-            if (debug) printf("LD D, H\n");
-            D = H;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD D, H\n");
+                   D = H;
+                   PC += 1;
+                   return 4;
         case 0x55: // LD D, L    b1 c4 flags:----
-            if (debug) printf("LD D, L\n");
-            D = L;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD D, L\n");
+                   D = L;
+                   PC += 1;
+                   return 4;
         case 0x56: // LD D, [HL]    b1 c8 flags:----
-            if (debug) printf("LD D, [HL]\n");
-            D = rom[HL];
-            PC += 1;
-            return 8;
+                   if (debug) printf("LD D, [HL]\n");
+                   D = rom[HL];
+                   PC += 1;
+                   return 8;
         case 0x57: // LD D, A    b1 c4 flags:----
-            if (debug) printf("LD D, A\n");
-            D = A;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD D, A\n");
+                   D = A;
+                   PC += 1;
+                   return 4;
         case 0x58: // LD E, B    b1 c4 flags:----
-            if (debug) printf("LD E, B\n");
-            E = B;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD E, B\n");
+                   E = B;
+                   PC += 1;
+                   return 4;
         case 0x59: // LD E, C    b1 c4 flags:----
-            if (debug) printf("LD E, C\n");
-            E = C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD E, C\n");
+                   E = C;
+                   PC += 1;
+                   return 4;
         case 0x5A: // LD E, D    b1 c4 flags:----
-            if (debug) printf("LD E, D\n");
-            E = D;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD E, D\n");
+                   E = D;
+                   PC += 1;
+                   return 4;
         case 0x5B: // LD E, E    b1 c4 flags:----
-            if (debug) printf("LD E, E\n");
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD E, E\n");
+                   PC += 1;
+                   return 4;
         case 0x5C: // LD E, H    b1 c4 flags:----
-            if (debug) printf("LD E, H\n");
-            E = H;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD E, H\n");
+                   E = H;
+                   PC += 1;
+                   return 4;
         case 0x5D: // LD E, L    b1 c4 flags:----
-            if (debug) printf("LD E, L\n");
-            E = L;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD E, L\n");
+                   E = L;
+                   PC += 1;
+                   return 4;
         case 0x5E: // LD E, [HL]    b1 c8 flags:----
-            if (debug) printf("LD E, [HL]\n");
-            E = rom[HL];
-            PC += 1;
-            return 8;
+                   if (debug) printf("LD E, [HL]\n");
+                   E = rom[HL];
+                   PC += 1;
+                   return 8;
         case 0x5F: // LD E, A b1 c4 flags:----
-            if (debug) printf("LD E, A\n");
-            E = A;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD E, A\n");
+                   E = A;
+                   PC += 1;
+                   return 4;
         case 0x60: // LD H, B    b1 c4 flags:----
-            if (debug) printf("LD H, B\n");
-            H = B;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD H, B\n");
+                   H = B;
+                   PC += 1;
+                   return 4;
         case 0x61: // LD H, C    b1 c4 flags:----
-            if (debug) printf("LD H, C\n");
-            H = C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD H, C\n");
+                   H = C;
+                   PC += 1;
+                   return 4;
         case 0x62: // LD H, D    b1 c4 flags:----
-            if (debug) printf("LD H, D\n");
-            H = D;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD H, D\n");
+                   H = D;
+                   PC += 1;
+                   return 4;
         case 0x63: // LD H, E    b1 c4 flags:----
-            if (debug) printf("LD H, E\n");
-            H = E;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD H, E\n");
+                   H = E;
+                   PC += 1;
+                   return 4;
         case 0x64: // LD H, H    b1 c4 flags:----
-            if (debug) printf("LD H, H\n");
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD H, H\n");
+                   PC += 1;
+                   return 4;
         case 0x65: // LD H, L    b1 c4 flags:----
-            if (debug) printf("LD H, L\n");
-            H = L;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD H, L\n");
+                   H = L;
+                   PC += 1;
+                   return 4;
         case 0x66: // LD H, [HL]    b1 c8 flags:----
-            if (debug) printf("LD H, [HL]\n");
-            H = rom[HL];
-            PC += 1;
-            return 8;
+                   if (debug) printf("LD H, [HL]\n");
+                   H = rom[HL];
+                   PC += 1;
+                   return 8;
         case 0x67: // LD H, A    b1 c4 flags:----
-            if (debug) printf("LD H, A\n");
-            H = A;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD H, A\n");
+                   H = A;
+                   PC += 1;
+                   return 4;
         case 0x68: // LD L, B    b1 c4 flags:----
-            if (debug) printf("LD L, B\n");
-            L = B;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD L, B\n");
+                   L = B;
+                   PC += 1;
+                   return 4;
         case 0x69: // LD L, C    b1 c4 flags:----
-            if (debug) printf("LD L, C\n");
-            L = C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD L, C\n");
+                   L = C;
+                   PC += 1;
+                   return 4;
         case 0x6A: // LD L, D    b1 c4 flags:----
-            if (debug) printf("LD L, D\n");
-            L = D;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD L, D\n");
+                   L = D;
+                   PC += 1;
+                   return 4;
         case 0x6B: // LD L, E    b1 c4 flags:----
-            if (debug) printf("LD L, E\n");
-            L = E;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD L, E\n");
+                   L = E;
+                   PC += 1;
+                   return 4;
         case 0x6C: // LD L, H    b1 c4 flags:----
-            if (debug) printf("LD L, H\n");
-            L = H;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD L, H\n");
+                   L = H;
+                   PC += 1;
+                   return 4;
         case 0x6D: // LD L, L    b1 c4 flags:----
-            if (debug) printf("LD L, L\n");
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD L, L\n");
+                   PC += 1;
+                   return 4;
         case 0x6E: // LD L, [HL]    b1 c8 flags:----
-            if (debug) printf("LD L, [HL]\n");
-            L = rom[HL];
-            PC += 1;
-            return 8;
+                   if (debug) printf("LD L, [HL]\n");
+                   L = rom[HL];
+                   PC += 1;
+                   return 8;
         case 0x6F: // LD L, A  b1 c4 flags:----
-            if (debug) printf("LD L, A\n");
-            L = A;
-            PC += 1;
-            return 8;
+                   if (debug) printf("LD L, A\n");
+                   L = A;
+                   PC += 1;
+                   return 8;
         case 0x70: // LD [HL], B    b1 c8 flags:----
-            if (debug) printf("LD [HL], B\n");
-            mem_write8(L | (H << 8), B); 
-            PC += 1;
-            return 8;
+                   if (debug) printf("LD [HL], B\n");
+                   mem_write8(L | (H << 8), B); 
+                   PC += 1;
+                   return 8;
         case 0x71: // LD [HL], C    b1 c8 flags:----
-            if (debug) printf("LD [HL], C\n");
-            mem_write8(L | (H << 8), C); 
-            PC += 1;
-            return 8;
+                   if (debug) printf("LD [HL], C\n");
+                   mem_write8(L | (H << 8), C); 
+                   PC += 1;
+                   return 8;
         case 0x72: // LD [HL], D    b1 c8 flags:----
-            if (debug) printf("LD [HL], D\n");
-            mem_write8(L | (H << 8), D); 
-            PC += 1;
-            return 8;
+                   if (debug) printf("LD [HL], D\n");
+                   mem_write8(L | (H << 8), D); 
+                   PC += 1;
+                   return 8;
         case 0x73: // LD [HL], E   b1 c8 flags:----
-            if (debug) printf("LD [HL], E\n");
-            mem_write8(L | (H << 8), E); 
-            PC += 1;
-            return 8;
+                   if (debug) printf("LD [HL], E\n");
+                   mem_write8(L | (H << 8), E); 
+                   PC += 1;
+                   return 8;
         case 0x74: // LD [HL], H   b1 c8 flags:----
-            if (debug) printf("LD [HL], H\n");
-            mem_write8(L | (H << 8), H); 
-            PC += 1;
-            return 8;
+                   if (debug) printf("LD [HL], H\n");
+                   mem_write8(L | (H << 8), H); 
+                   PC += 1;
+                   return 8;
         case 0x75: // LD [HL], L   b1 c8 flags:----
-            if (debug) printf("LD [HL], L\n");
-            mem_write8(L | (H << 8), L); 
-            PC += 1;
-            return 8;
+                   if (debug) printf("LD [HL], L\n");
+                   mem_write8(L | (H << 8), L); 
+                   PC += 1;
+                   return 8;
         case 0x76: // HALT    b1 c4 flags:----
-            if (debug) printf("HALT\n");
-            printf("HALT: IME=%d IE=%02X IF=%02X\n", IME, rom[0xFFFF], rom[0xFF0F]);
-            exit(1);
-            {
-                uint8_t IE = rom[0xFFFF];
-                uint8_t IF = rom[0xFF0F];
+                   if (debug) printf("HALT\n");
+                   printf("HALT: IME=%d IE=%02X IF=%02X\n", IME, rom[0xFFFF], rom[0xFF0F]);
+                   exit(1);
+                   {
+                       uint8_t IE = rom[0xFFFF];
+                       uint8_t IF = rom[0xFF0F];
 
-                if (IME) {
-                    // IME set: wait for interrupt, handler will be called
-                    while ((IE & IF & 0x1F) == 0) {
-                        timer_step(4);
-                        ppu_step(4);
-                        IE = rom[0xFFFF];
-                        IF = rom[0xFF0F];
-                    }
-                    PC += 1;
-                } else if ((IE & IF & 0x1F) == 0) {
-                    // IME not set, no interrupt pending: wait, but handler won't be called
-                    while ((IE & IF & 0x1F) == 0) {
-                        timer_step(4);
-                        ppu_step(4);
-                        IE = rom[0xFFFF];
-                        IF = rom[0xFF0F];
-                    }
-                    PC += 1;
-                } else {
-                    // IME not set, interrupt pending: HALT bug - don't increment PC
-                    // Next byte will be read twice
-                    PC += 1;  // Don't increment - this is the HALT bug
-                }
-            }
-            return 4;
+                       if (IME) {
+                           // IME set: wait for interrupt, handler will be called
+                           while ((IE & IF & 0x1F) == 0) {
+                               timer_step(4);
+                               ppu_steps(4);
+                               IE = rom[0xFFFF];
+                               IF = rom[0xFF0F];
+                           }
+                           PC += 1;
+                       } else if ((IE & IF & 0x1F) == 0) {
+                           // IME not set, no interrupt pending: wait, but handler won't be called
+                           while ((IE & IF & 0x1F) == 0) {
+                               timer_step(4);
+                               ppu_steps(4);
+                               IE = rom[0xFFFF];
+                               IF = rom[0xFF0F];
+                           }
+                           PC += 1;
+                       } else {
+                           // IME not set, interrupt pending: HALT bug - don't increment PC
+                           // Next byte will be read twice
+                           PC += 1;  // Don't increment - this is the HALT bug
+                       }
+                   }
+                   return 4;
         case 0x77: // LD [HL], A    b1 c8 flags:----
-            if (debug) printf("LD [HL], A\n");
-            mem_write8(L | (H << 8), A); 
-            PC += 1;
-            return 8;
+                   if (debug) printf("LD [HL], A\n");
+                   mem_write8(L | (H << 8), A); 
+                   PC += 1;
+                   return 8;
         case 0x78: // LD A, B    b1 c4 flags:----
-            if (debug) printf("LD A, B\n");
-            A = B;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD A, B\n");
+                   A = B;
+                   PC += 1;
+                   return 4;
         case 0x79: // LD A, C    b1 c4 flags:----
-            if (debug) printf("LD A, C\n");
-            A = C;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD A, C\n");
+                   A = C;
+                   PC += 1;
+                   return 4;
         case 0x7A: // LD A, D    b1 c4 flags:----
-            if (debug) printf("LD A, D\n");
-            A = D;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD A, D\n");
+                   A = D;
+                   PC += 1;
+                   return 4;
         case 0x7B: // LD A, E    b1 c4 flags:----
-            if (debug) printf("LD A, E\n");
-            A = E;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD A, E\n");
+                   A = E;
+                   PC += 1;
+                   return 4;
         case 0x7C: // LD A, H    b1 c4 flags:----
-            if (debug) printf("LD A, H\n");
-            A = H;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD A, H\n");
+                   A = H;
+                   PC += 1;
+                   return 4;
         case 0x7D: // LD A, L    b1 c4 flags:----
-            if (debug) printf("LD A, L\n");
-            A = L;
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD A, L\n");
+                   A = L;
+                   PC += 1;
+                   return 4;
         case 0x7E: // LD A, [HL]    b1 c8 flags:----
-            if (debug) printf("LD A, [HL]\n");
-            A = rom[HL];
-            PC += 1;
-            return 8;
+                   if (debug) printf("LD A, [HL]\n");
+                   A = rom[HL];
+                   PC += 1;
+                   return 8;
         case 0x7F: // LD A, A    b1 c4 flags:----
-            if (debug) printf("LD A, A\n");
-            PC += 1;
-            return 4;
+                   if (debug) printf("LD A, A\n");
+                   PC += 1;
+                   return 4;
         case 0x80: // ADD A, B    b1 c4 flags:Z0HC
-            if (debug) printf("ADD A, B\n");
-            if (A + B > 0xFF) SETF_C; else CLRF_C;
-            if ( (A & 0x0F) + (B & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
-            A += B;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N;
-            PC += 2;
-            return 8;
+                   if (debug) printf("ADD A, B\n");
+                   if (A + B > 0xFF) SETF_C; else CLRF_C;
+                   if ( (A & 0x0F) + (B & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+                   A += B;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   PC += 2;
+                   return 8;
         case 0x81: // ADD A, C    b1 c4 flags:Z0HC
-            if (debug) printf("ADD A, C\n");
-            if (A + C > 0xFF) SETF_C; else CLRF_C;
-            if ( (A & 0x0F) + (C & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
-            A += C;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N;
-            PC += 2;
-            return 8;
+                   if (debug) printf("ADD A, C\n");
+                   if (A + C > 0xFF) SETF_C; else CLRF_C;
+                   if ( (A & 0x0F) + (C & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+                   A += C;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   PC += 2;
+                   return 8;
         case 0x82: // ADD A, D    b1 c4 flags:Z0HC
-            if (debug) printf("ADD A, D\n");
-            if (A + D > 0xFF) SETF_C; else CLRF_C;
-            if ( (A & 0x0F) + (D & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
-            A += D;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N;
-            PC += 2;
-            return 8;
+                   if (debug) printf("ADD A, D\n");
+                   if (A + D > 0xFF) SETF_C; else CLRF_C;
+                   if ( (A & 0x0F) + (D & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+                   A += D;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   PC += 2;
+                   return 8;
         case 0x83: // ADD A, E    b1 c4 flags:Z0HC
-            if (debug) printf("ADD A, E\n");
-            if (A + E > 0xFF) SETF_C; else CLRF_C;
-            if ( (A & 0x0F) + (E & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
-            A += E;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N;
-            PC += 2;
-            return 8;
+                   if (debug) printf("ADD A, E\n");
+                   if (A + E > 0xFF) SETF_C; else CLRF_C;
+                   if ( (A & 0x0F) + (E & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+                   A += E;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   PC += 2;
+                   return 8;
         case 0x84: // ADD A, H    b1 c4 flags:Z0HC
-            if (debug) printf("ADD A, H\n");
-            if (A + H > 0xFF) SETF_C; else CLRF_C;
-            if ( (A & 0x0F) + (H & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
-            A += H;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N;
-            PC += 2;
-            return 8;
+                   if (debug) printf("ADD A, H\n");
+                   if (A + H > 0xFF) SETF_C; else CLRF_C;
+                   if ( (A & 0x0F) + (H & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+                   A += H;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   PC += 2;
+                   return 8;
         case 0x85: // ADD A, L    b1 c4 flags:Z0HC
-            if (debug) printf("ADD A, L\n");
-            if (A + L > 0xFF) SETF_C; else CLRF_C;
-            if ( (A & 0x0F) + (L & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
-            A += L;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N;
-            PC += 2;
-            return 8;
+                   if (debug) printf("ADD A, L\n");
+                   if (A + L > 0xFF) SETF_C; else CLRF_C;
+                   if ( (A & 0x0F) + (L & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+                   A += L;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   PC += 2;
+                   return 8;
         case 0x86: // ADD A, [HL]    b1 c8 flags:Z0HC
-            n8 = rom[HL];
-            if (debug) printf("ADD A, [HL]\n");
-            if (A + n8 > 0xFF) SETF_C; else CLRF_C;
-            if ( (A & 0x0F) + (n8 & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
-            A += n8;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N;
-            PC += 1;
-            return 8;
+                   n8 = rom[HL];
+                   if (debug) printf("ADD A, [HL]\n");
+                   if (A + n8 > 0xFF) SETF_C; else CLRF_C;
+                   if ( (A & 0x0F) + (n8 & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+                   A += n8;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   PC += 1;
+                   return 8;
         case 0x87: // ADD A, A    b1 c4 flags:Z0HC
-            if (debug) printf("ADD A, A\n");
-            if (A + A > 0xFF) SETF_C; else CLRF_C;
-            if ( (A & 0x0F) + (A & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
-            A += A;
-            if (A == 0) SETF_Z; else CLRF_Z;
-            CLRF_N;
-            PC += 1;
-            return 4;
+                   if (debug) printf("ADD A, A\n");
+                   if (A + A > 0xFF) SETF_C; else CLRF_C;
+                   if ( (A & 0x0F) + (A & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+                   A += A;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   PC += 1;
+                   return 4;
         case 0x88: { // ADC A, B    b1 c4 flags:Z0HC
                        if (debug) printf("ADC A, B\n");
                        uint8_t carry = READF_C;
@@ -2246,6 +2223,13 @@ void dec_reg16(uint8_t *low, uint8_t *high) {
 }
 uint8_t val_char = 0;
 void mem_write8(uint16_t addr, uint8_t b) {
+    if (addr == 0xFF46) {
+        // DMA transfer: copy 160 bytes from (value << 8) to OAM
+        uint16_t src = b << 8;
+        for (int i = 0; i < 160; i++) {
+            rom[0xFE00 + i] = rom[src + i];
+        }
+    }
     if (debug) printf("Writing to ");
     if (addr < 0x4000) {
         if (debug)   printf("ROM bank 0 (ignored)\n");
