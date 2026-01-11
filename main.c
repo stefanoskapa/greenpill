@@ -80,6 +80,7 @@ int ppu_dots = 0;
 // LCD Y coordinate (read-only)
 //  LY can hold any value from 0 to 153, with values from 144 to 153 indicating the VBlank period.
 uint8_t *LY = &rom[0xFF44];
+uint8_t *STAT = &rom[0xFF41];
 
 int main(int argc, char **argv) {
 
@@ -209,28 +210,7 @@ int ppu_step(int cycles) {
         frame_count++;
     }
 
-
-
     ppu_dots += cycles;
-
-    // Update STAT register (0xFF41) with current mode
-    uint8_t stat = rom[0xFF41] & 0xFC;  // Keep upper bits, clear mode bits
-    if (*LY >= 144) {
-        stat |= 0x01;  // Mode 1: VBlank
-        if (!frame_presented) {
-            frame_presented = true;
-        }
-    } else if (ppu_dots <= 80) {
-        stat |= 0x02;  // Mode 2: OAM scan
-    } else if (ppu_dots <= 80 + 172) {
-        stat |= 0x03;  // Mode 3: Drawing
-    } else {
-        stat |= 0x00;  // Mode 0: HBlank
-    }
-    rom[0xFF41] = stat; 
-
-
-
 
     if (ppu_dots >= 456) {
         ppu_dots -= 456;
@@ -242,11 +222,11 @@ int ppu_step(int cycles) {
             frame_presented = false;
         }
     }
-    if (*LY == 0) {
-        //printf("LCDC: %02X\n", *LCDC);
-    }
+    
+    *STAT &= 0xFC;
     if (*LY >= 144) {
         // VBlank mode (mode 1)
+        *STAT |= 0x01;
         if (!frame_presented) {
             frame_presented = true;
             rom[0xFF0F] |= 0x01;  // Request VBlank interrupt
@@ -258,8 +238,10 @@ int ppu_step(int cycles) {
         }
     } else if (ppu_dots <= 80) {
         // OAM scan (mode 2)
+        *STAT |= 0x02;
     } else if (ppu_dots <= 80 + 172) {
         // Drawing (mode 3)
+        *STAT |= 0x03;
         if (!scanline_rendered) {
             scanline_rendered = true;
 
@@ -292,6 +274,7 @@ int ppu_step(int cycles) {
         }
     } else {
         // HBlank (mode 0)
+        *STAT |= 0x00;
     }
 
     return 0;
