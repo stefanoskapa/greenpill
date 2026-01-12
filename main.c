@@ -44,7 +44,7 @@ void show_frame();
 
 bool debug = false;
 bool sdl_render = true;
-uint32_t framebuffer[160 * 144];
+uint32_t framebuffer[160 * 144] = {0};
 SDL_Window *window;
 SDL_Renderer *renderer;
 SDL_Texture *texture;
@@ -92,6 +92,9 @@ uint8_t *LY = &rom[0xFF44];
 uint8_t *STAT = &rom[0xFF41];
 
 int main(int argc, char **argv) {
+    for (int i = 0; i < 160 * 144; i++) {
+        framebuffer[i] =0xFF346856;
+    }
 
     A = 0x01;
     F = 0xB0;
@@ -248,7 +251,9 @@ void ppu_step() {
                     intersecting_sprites[inter_sprite_len++] = object;
                 }
             }
-            //printf("%d intersecting  objects found for line %d\n",inter_sprite_len,  *LY);
+            if (inter_sprite_len > 0) {
+                printf("%d intersecting  objects found for line %d\n",inter_sprite_len,  *LY);
+            }
         }
 
     } else if (dots > 80 && dots <= 456) {
@@ -258,14 +263,14 @@ void ppu_step() {
         *STAT = (*STAT & 0b11111100) | 0b11;  // Mode 3
         
         int height = (*LCDC & 0x04) ? 16 : 8;
-        if (dots == 81) {
+        if (dots == 88) {
             //mix background, window and objects
             //write scanline to SDL array
             // Y = Object’s vertical position on the screen + 16
             // X = Object’s horizontal position on the screen + 8
             for (int i = 0; i < inter_sprite_len; i++) {
                 struct sprite object = intersecting_sprites[i];
-                int row_in_sprite = *LY & height; //example Ly=2 % 8 = 2, 8 % 8 = 0,etc
+                int row_in_sprite = *LY % height; //example Ly=2 % 8 = 2, 8 % 8 = 0,etc
                 //get pixels from tilemaps
                 // 8x8  The index byte specifies the object’s only tile 
                 //      index ($00-$FF). This unsigned value selects a 
@@ -281,21 +286,22 @@ void ppu_step() {
                 //color ID of each pixel, and the second byte specifies the most significant 
                 //bit. In both bytes, bit 7 represents the leftmost pixel, and bit 0 the rightmost.
                 if (height ==  8) { 
-                    
-                    for (int j = 0; j < 8; j++) {
-                        
-                        uint8_t byte1 = rom[0x8000 + object.tile * 16 + row_in_sprite];
-                        uint8_t byte2 = rom[0x8000 + object.tile * 16 + row_in_sprite + 1];
-                        uint8_t b_mask = 1 << (7 - j); // 00000001 -> 10000000 (7 shifts) 
-                        byte1 &= b_mask;
-                        byte1 = byte1 >> (7 - j); // shifts: 7, 6, 5, 4, 3, 2, 1, 0 
-                        
-                        byte2 &= b_mask;
-                        byte2 = byte2 >> (7 - j);
-                        uint8_t color_code = byte1 | (byte2 << 1);
+                    uint8_t byte1 = rom[0x8000 + object.tile * 16 + row_in_sprite * 2];
+                    uint8_t byte2 = rom[0x8000 + object.tile * 16 + row_in_sprite * 2 + 1];
 
+                    for (int j = 0; j < 8; j++) { // 8 pixels from left to right
+                        
+                        uint8_t b_mask = 1 << (7 - j); // 00000001 -> 10000000 (7 shifts) 
+                        uint8_t lo = (byte1 & b_mask) >> (7 - j);
+                        uint8_t hi = (byte2 & b_mask) >> (7 - j);
+        
+                        uint8_t color_code = lo | (hi << 1);
+
+                        printf("color code= %d\n", color_code);
                             //uint32_t framebuffer[160 * 144];
-                        framebuffer[*LY * 160 + (object.x - 8) + j] = palette[color_code]; 
+                        if (color_code != 0) { // color code 0 is transparent
+                            framebuffer[*LY * 160 + (object.x - 8) + j] = palette[color_code]; 
+                        }
                     }
                 } else {
                     printf("Tall sprites detected!\n");
