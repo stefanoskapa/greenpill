@@ -40,6 +40,7 @@ void inc_reg16(uint8_t *low, uint8_t *high);
 void timer_step(int cycles);
 void handle_interrupts(void);
 uint8_t *get_tile(int index);
+void show_frame();
 
 bool debug = false;
 bool sdl_render = true;
@@ -199,14 +200,14 @@ int main(int argc, char **argv) {
     return EXIT_SUCCESS;
 }
 /*
- Game Boy resolution: 160x144
- A "dot" = 222 Hz (≅ 4.194 MHz) time unit. 4 dots / M-cycle
- A frame consists of 154 scanlines; during the first 144, the screen is drawn top to bottom, left to right.
+   Game Boy resolution: 160x144
+   A "dot" = 222 Hz (≅ 4.194 MHz) time unit. 4 dots / M-cycle
+   A frame consists of 154 scanlines; during the first 144, the screen is drawn top to bottom, left to right.
 
- The cpu_step cycles are given as an argument, in order to know
- how many ticks to advance the PPU, as both units work in sync
- with a system clock.
- */
+   The cpu_step cycles are given as an argument, in order to know
+   how many ticks to advance the PPU, as both units work in sync
+   with a system clock.
+   */
 
 void ppu_steps(int cycles) {
     for (int i = 0; i < cycles; i++) {
@@ -216,7 +217,7 @@ void ppu_steps(int cycles) {
 
 void ppu_step() {
     dots++; 
-    
+
     static struct sprite intersecting_sprites[40];
     static int inter_sprite_len = 0;
 
@@ -227,11 +228,10 @@ void ppu_step() {
         // plan: Scan the 40 OAM entries to find which intersect with the current line
         // Object attributes reside in the object attribute memory (OAM) at $FE00-FE9F.
         // Each of the 40 entries consists of four bytes
-        // we can do all the work on dot 1 and then wait
         // Object’s vertical position on the screen + 16
         *STAT = (*STAT & 0b11111100) | 0b10;  // Mode 2
-        if (dots == 1) {
-        inter_sprite_len = 0;
+        if (dots == 1) { // do all work on dot 1, then wait for the remaining dots
+            inter_sprite_len = 0;
             int height = (*LCDC & 0x04) ? 16 : 8;
 
             for (int i = 0; i < 40; i++) {
@@ -241,14 +241,14 @@ void ppu_step() {
                     rom[0xFE00 + i * 4 + 2],
                     rom[0xFE00 + i * 4 + 3]
                 };
-            
+
                 // determine intersection with LY
                 int screen_y = object.y - 16;
                 if (*LY >= screen_y && *LY < screen_y + height) {
                     intersecting_sprites[inter_sprite_len++] = object;
-                    printf("Intersecting  object found for line %d\n", *LY);
                 }
             }
+            //printf("%d intersecting  objects found for line %d\n",inter_sprite_len,  *LY);
         }
 
     } else if (dots > 80 && dots <= 456) {
@@ -256,36 +256,88 @@ void ppu_step() {
         // duration: between 172 and 289
         // description: Sending pixels to the LCD (VRAM inaccessible)
         *STAT = (*STAT & 0b11111100) | 0b11;  // Mode 3
-        // mode 0 - Horizontal Blank
-        // duration: 376 - mode 3’s duration
-        // description: Waiting until the end of the scanline
+        
+        int height = (*LCDC & 0x04) ? 16 : 8;
+        if (dots == 81) {
+            //mix background, window and objects
+            //write scanline to SDL array
+            // Y = Object’s vertical position on the screen + 16
+            // X = Object’s horizontal position on the screen + 8
+            for (int i = 0; i < inter_sprite_len; i++) {
+                struct sprite object = intersecting_sprites[i];
+                int row_in_sprite = *LY & height; //example Ly=2 % 8 = 2, 8 % 8 = 0,etc
+                //get pixels from tilemaps
+                // 8x8  The index byte specifies the object’s only tile 
+                //      index ($00-$FF). This unsigned value selects a 
+                //      tile from the memory area at $8000-$8FFF
+                // 8x16 The memory area at $8000-$8FFF is still interpreted 
+                //      as a series of 8×8 tiles, where every 2 tiles form 
+                //      an object. In this mode, this byte specifies 
+                //      the index of the first (top) tile of the object.
+                //
+                //Data format in tile data
+                //Each tile occupies 16 bytes, where each line is represented by 2 bytes
+                //For each line, the first byte specifies the least significant bit of the 
+                //color ID of each pixel, and the second byte specifies the most significant 
+                //bit. In both bytes, bit 7 represents the leftmost pixel, and bit 0 the rightmost.
+                if (height ==  8) { 
+                    
+                    for (int j = 0; j < 8; j++) {
+                        
+                        uint8_t byte1 = rom[0x8000 + object.tile * 16 + row_in_sprite];
+                        uint8_t byte2 = rom[0x8000 + object.tile * 16 + row_in_sprite + 1];
+                        uint8_t b_mask = 1 << (7 - j); // 00000001 -> 10000000 (7 shifts) 
+                        byte1 &= b_mask;
+                        byte1 = byte1 >> (7 - j); // shifts: 7, 6, 5, 4, 3, 2, 1, 0 
+                        
+                        byte2 &= b_mask;
+                        byte2 = byte2 >> (7 - j);
+                        uint8_t color_code = byte1 | (byte2 << 1);
+
+                            //uint32_t framebuffer[160 * 144];
+                        framebuffer[*LY * 160 + (object.x - 8) + j] = palette[color_code]; 
+                    }
+                } else {
+                    printf("Tall sprites detected!\n");
+                    exit(1);
+                }
+                
 
 
-        //artificial mode change for testing
-        if (dots > 80 + 172) {
-          *STAT = (*STAT & 0b11111100) | 0b00;  // Mode 0
+            }
         }
-    } else if (*LY >= 144) {
-        // mode 1 - Vertical Blank
-        // duration: 4560 dots (10 scanlines)
-        // description: Waiting until the next frame
-        *STAT = (*STAT & 0b11111100) | 0b01;  // Mode 1
+
+                                              //artificial mode change for testing
+        if (dots > 80 + 172) {
+                              // mode 0 - Horizontal Blank
+                                              // duration: 376 - mode 3’s duration
+                                              // description: Waiting until the end of the scanline
+            *STAT = (*STAT & 0b11111100) | 0b00;  // Mode 0
+        }
     }
-     
+
     if (dots == 456) {
-    dots = 0;
-    (*LY)++;
+        dots = 0;
+        (*LY)++;
 
-    if (*LY == 144) {
-        *IF |= 0x01;  // Request VBlank interrupt!
-    }
-
-    if (*LY > 153) {
-        *LY = 0;
+        if (*LY == 144) { // mode 1 Vertical Blank (LY= [144,153])
+                          // mode 1 - Vertical Blank
+                          // duration: 4560 dots (10 scanlines)
+                          // description: Waiting until the next frame
+            *STAT = (*STAT & 0b11111100) | 0b01;  // Mode 1
+            *IF |= 0x01;  // Request VBlank interrupt!
+            show_frame();
+        } else if (*LY > 153) {
+            *LY = 0;
+        }
     }
 }
-}
 
+void show_frame() {
+    SDL_UpdateTexture(texture, NULL, framebuffer, 160 * sizeof(uint32_t));
+    SDL_RenderCopy(renderer, texture, NULL, NULL);
+    SDL_RenderPresent(renderer);
+}
 /*
  * Tile data is stored in VRAM in the memory area at $8000-$97FF; 
  * with each tile taking 16 bytes, this area defines data for 384 tiles.
