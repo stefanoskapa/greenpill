@@ -44,7 +44,7 @@ void show_frame();
 
 bool debug = false;
 bool sdl_render = true;
-uint32_t framebuffer[160 * 144] = {0};
+uint32_t framebuffer[160 * 144];
 SDL_Window *window;
 SDL_Renderer *renderer;
 SDL_Texture *texture;
@@ -92,9 +92,6 @@ uint8_t *LY = &rom[0xFF44];
 uint8_t *STAT = &rom[0xFF41];
 
 int main(int argc, char **argv) {
-    for (int i = 0; i < 160 * 144; i++) {
-        framebuffer[i] =0xFF346856;
-    }
 
     A = 0x01;
     F = 0xB0;
@@ -263,11 +260,51 @@ void ppu_step() {
         *STAT = (*STAT & 0b11111100) | 0b11;  // Mode 3
         
         int height = (*LCDC & 0x04) ? 16 : 8;
-        if (dots == 88) {
+        if (dots == 81 && *LY < 144) {
+            puts("rendering background");
+            uint16_t bg_tilemap_addr;
+            if ((*LCDC & 0b00001000) == 0) {
+                bg_tilemap_addr = 0x9800;
+            } else {
+                bg_tilemap_addr = 0x9C00;
+            }
+
+
+            int tile_row = *LY / 8;
+            int row_in_tile = *LY % 8; 
+            int x = 0;
+            //160 pixels / 8 pixels per tile = 20 tiles.
+            for (int i = 0; i < 20; i++) {
+                uint8_t tile_index = rom[bg_tilemap_addr + (tile_row * 32)  + i];
+                uint16_t tile_addr;
+                if (*LCDC & 0x10) {
+                    tile_addr = 0x8000 + tile_index * 16;
+                } else {
+                    tile_addr = 0x9000 + ((int8_t)tile_index) * 16;
+                }
+
+                uint8_t bgbyte1 = rom[tile_addr + row_in_tile * 2];
+                uint8_t bgbyte2 = rom[tile_addr + row_in_tile * 2 + 1];
+
+                    for (int j = 0; j < 8; j++) { // 8 pixels from left to right
+                        
+                        uint8_t b_mask = 1 << (7 - j); // 00000001 -> 10000000 (7 shifts) 
+                        uint8_t lo = (bgbyte1 & b_mask) >> (7 - j);
+                        uint8_t hi = (bgbyte2 & b_mask) >> (7 - j);
+        
+                        uint8_t color_code = lo | (hi << 1);
+                        //printf("color code= %d\n", color_code);
+
+                        framebuffer[*LY * 160 + x] = palette[color_code]; 
+                        x++;
+                    }
+            }
+
             //mix background, window and objects
             //write scanline to SDL array
             // Y = Object’s vertical position on the screen + 16
             // X = Object’s horizontal position on the screen + 8
+            puts("rendering objects");
             for (int i = 0; i < inter_sprite_len; i++) {
                 struct sprite object = intersecting_sprites[i];
                 int row_in_sprite = *LY % height; //example Ly=2 % 8 = 2, 8 % 8 = 0,etc
@@ -296,9 +333,8 @@ void ppu_step() {
                         uint8_t hi = (byte2 & b_mask) >> (7 - j);
         
                         uint8_t color_code = lo | (hi << 1);
-
                         printf("color code= %d\n", color_code);
-                            //uint32_t framebuffer[160 * 144];
+
                         if (color_code != 0) { // color code 0 is transparent
                             framebuffer[*LY * 160 + (object.x - 8) + j] = palette[color_code]; 
                         }
