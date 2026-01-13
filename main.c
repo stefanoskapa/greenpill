@@ -41,6 +41,7 @@ void timer_step(int cycles);
 void handle_interrupts(void);
 uint8_t *get_tile(int index);
 void show_frame();
+void send_word_to_buffer(uint8_t byte1, uint8_t byte2, uint8_t x, bool is_obj);
 
 bool debug = false;
 bool sdl_render = true;
@@ -90,6 +91,9 @@ int dots = 0;
 //  LY can hold any value from 0 to 153, with values from 144 to 153 indicating the VBlank period.
 uint8_t *LY = &rom[0xFF44];
 uint8_t *STAT = &rom[0xFF41];
+//FF42–FF43 — SCY, SCX:
+uint8_t *SCY = &rom[0xFF42];
+uint8_t *SCX = &rom[0xFF43];
 
 int main(int argc, char **argv) {
 
@@ -221,6 +225,8 @@ void ppu_step() {
     static struct sprite intersecting_sprites[40];
     static int inter_sprite_len = 0;
 
+    int height = (*LCDC & 0x04) ? 16 : 8;
+
     if (dots > 0 && dots <= 80) {
         // mode 2 - OAM scan
         // duration: 80 dots
@@ -232,9 +238,14 @@ void ppu_step() {
         *STAT = (*STAT & 0b11111100) | 0b10;  // Mode 2
         if (dots == 1) { // do all work on dot 1, then wait for the remaining dots
             inter_sprite_len = 0;
-            int height = (*LCDC & 0x04) ? 16 : 8;
 
             for (int i = 0; i < 40; i++) {
+
+                if (inter_sprite_len == 10) {
+                    printf("more than 10 objects per line found. ignoring...\n");
+                    break;
+                }
+
                 struct sprite object = { 
                     rom[0xFE00 + i * 4],
                     rom[0xFE00 + i * 4 + 1],
@@ -259,9 +270,8 @@ void ppu_step() {
         // description: Sending pixels to the LCD (VRAM inaccessible)
         *STAT = (*STAT & 0b11111100) | 0b11;  // Mode 3
         
-        int height = (*LCDC & 0x04) ? 16 : 8;
         if (dots == 81 && *LY < 144) {
-            puts("rendering background");
+            //puts("rendering background");
             uint16_t bg_tilemap_addr;
             if ((*LCDC & 0b00001000) == 0) {
                 bg_tilemap_addr = 0x9800;
@@ -270,12 +280,19 @@ void ppu_step() {
             }
 
 
-            int tile_row = *LY / 8;
-            int row_in_tile = *LY % 8; 
+            int y = (*SCY + *LY) & 0xFF;
+
+            int tile_row = y / 8;
+            int row_in_tile = y % 8; 
             int x = 0;
+
             //160 pixels / 8 pixels per tile = 20 tiles.
             for (int i = 0; i < 20; i++) {
-                uint8_t tile_index = rom[bg_tilemap_addr + (tile_row * 32)  + i];
+                int map_x = (*SCX + (i * 8)) & 0xFF;
+
+                int tile_col = map_x / 8;
+                uint8_t tile_index = rom[bg_tilemap_addr + (tile_row * 32) + tile_col];
+
                 uint16_t tile_addr;
                 if (*LCDC & 0x10) {
                     tile_addr = 0x8000 + tile_index * 16;
@@ -285,27 +302,16 @@ void ppu_step() {
 
                 uint8_t bgbyte1 = rom[tile_addr + row_in_tile * 2];
                 uint8_t bgbyte2 = rom[tile_addr + row_in_tile * 2 + 1];
-
-                    for (int j = 0; j < 8; j++) { // 8 pixels from left to right
-                        
-                        uint8_t b_mask = 1 << (7 - j); // 00000001 -> 10000000 (7 shifts) 
-                        uint8_t lo = (bgbyte1 & b_mask) >> (7 - j);
-                        uint8_t hi = (bgbyte2 & b_mask) >> (7 - j);
-        
-                        uint8_t color_code = lo | (hi << 1);
-                        //printf("color code= %d\n", color_code);
-
-                        framebuffer[*LY * 160 + x] = palette[color_code]; 
-                        x++;
-                    }
+                send_word_to_buffer(bgbyte1, bgbyte2, i * 8, false);               
             }
 
             //mix background, window and objects
             //write scanline to SDL array
             // Y = Object’s vertical position on the screen + 16
             // X = Object’s horizontal position on the screen + 8
-            puts("rendering objects");
-            for (int i = 0; i < inter_sprite_len; i++) {
+            //puts("rendering objects");
+            uint8_t pixel_prio_map[144] = {0};
+            for (int i = inter_sprite_len - 1; i >=0; i--) {
                 struct sprite object = intersecting_sprites[i];
                 int row_in_sprite = *LY % height; //example Ly=2 % 8 = 2, 8 % 8 = 0,etc
                 //get pixels from tilemaps
@@ -322,26 +328,13 @@ void ppu_step() {
                 //For each line, the first byte specifies the least significant bit of the 
                 //color ID of each pixel, and the second byte specifies the most significant 
                 //bit. In both bytes, bit 7 represents the leftmost pixel, and bit 0 the rightmost.
-                if (height ==  8) { 
+                if (height == 8) { 
                     uint8_t byte1 = rom[0x8000 + object.tile * 16 + row_in_sprite * 2];
                     uint8_t byte2 = rom[0x8000 + object.tile * 16 + row_in_sprite * 2 + 1];
-
-                    for (int j = 0; j < 8; j++) { // 8 pixels from left to right
-                        
-                        uint8_t b_mask = 1 << (7 - j); // 00000001 -> 10000000 (7 shifts) 
-                        uint8_t lo = (byte1 & b_mask) >> (7 - j);
-                        uint8_t hi = (byte2 & b_mask) >> (7 - j);
-        
-                        uint8_t color_code = lo | (hi << 1);
-                        printf("color code= %d\n", color_code);
-
-                        if (color_code != 0) { // color code 0 is transparent
-                            framebuffer[*LY * 160 + (object.x - 8) + j] = palette[color_code]; 
-                        }
-                    }
+                    send_word_to_buffer(byte1, byte2, object.x - 8, true);               
                 } else {
                     printf("Tall sprites detected!\n");
-                    exit(1);
+                    //exit(1);
                 }
                 
 
@@ -375,6 +368,19 @@ void ppu_step() {
     }
 }
 
+void send_word_to_buffer(uint8_t byte1, uint8_t byte2, uint8_t x, bool is_obj) {
+
+    for (int j = 0; j < 8; j++) { // 8 pixels from left to right
+            
+        uint8_t b_mask = 1 << (7 - j); // 00000001 -> 10000000 (7 shifts) 
+        uint8_t lo = (byte1 & b_mask) >> (7 - j);
+        uint8_t hi = (byte2 & b_mask) >> (7 - j);
+        
+        uint8_t color_code = lo | (hi << 1);
+        if (is_obj == true && color_code == 0) continue;
+        framebuffer[*LY * 160 + x + j] = palette[color_code]; 
+    }
+}
 void show_frame() {
     SDL_UpdateTexture(texture, NULL, framebuffer, 160 * sizeof(uint32_t));
     SDL_RenderCopy(renderer, texture, NULL, NULL);
@@ -2411,6 +2417,7 @@ void mem_write16(uint16_t addr, uint16_t b) {
         if (debug) printf("ROM bank 1 (ignored)\n");
     } else if (addr < 0xA000) {
         if (debug)  printf("8 KiB Video RAM (VRAM)\n");
+       
         rom[addr] = b & 0xFF;
         rom[addr + 1] = (b >> 8) & 0xFF;
     } else if (addr < 0xC000) {
