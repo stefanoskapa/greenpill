@@ -41,7 +41,7 @@ void timer_step(int cycles);
 void handle_interrupts(void);
 uint8_t *get_tile(int index);
 void show_frame();
-void send_word_to_buffer(uint8_t byte1, uint8_t byte2, uint8_t x, bool is_obj);
+void send_word_to_buffer(uint8_t byte1, uint8_t byte2, int x, bool is_obj);
 
 bool debug = false;
 bool sdl_render = true;
@@ -224,7 +224,7 @@ void ppu_step() {
 
     static struct sprite intersecting_sprites[40];
     static int inter_sprite_len = 0;
-
+    
     int height = (*LCDC & 0x04) ? 16 : 8;
 
     if (dots > 0 && dots <= 80) {
@@ -237,6 +237,15 @@ void ppu_step() {
         // Object’s vertical position on the screen + 16
         *STAT = (*STAT & 0b11111100) | 0b10;  // Mode 2
         if (dots == 1) { // do all work on dot 1, then wait for the remaining dots
+            if (*LY == 0 && dots == 1) {
+    printf("OAM dump: ");
+    for (int i = 0; i < 10; i++) {
+        uint8_t y = rom[0xFE00 + i * 4];
+        uint8_t x = rom[0xFE00 + i * 4 + 1];
+        if (y != 0) printf("[%d: Y=%d X=%d] ", i, y, x);
+    }
+    printf("\n");
+}
             inter_sprite_len = 0;
 
             for (int i = 0; i < 40; i++) {
@@ -310,10 +319,12 @@ void ppu_step() {
             // Y = Object’s vertical position on the screen + 16
             // X = Object’s horizontal position on the screen + 8
             //puts("rendering objects");
-            uint8_t pixel_prio_map[144] = {0};
+            //uint8_t pixel_prio_map[144] = {0};
             for (int i = inter_sprite_len - 1; i >=0; i--) {
                 struct sprite object = intersecting_sprites[i];
-                int row_in_sprite = *LY % height; //example Ly=2 % 8 = 2, 8 % 8 = 0,etc
+                //int row_in_sprite = *LY % height; //example Ly=2 % 8 = 2, 8 % 8 = 0,etc
+                int row_in_sprite = *LY - (object.y - 16);
+
                 //get pixels from tilemaps
                 // 8x8  The index byte specifies the object’s only tile 
                 //      index ($00-$FF). This unsigned value selects a 
@@ -368,17 +379,20 @@ void ppu_step() {
     }
 }
 
-void send_word_to_buffer(uint8_t byte1, uint8_t byte2, uint8_t x, bool is_obj) {
+void send_word_to_buffer(uint8_t byte1, uint8_t byte2, int x, bool is_obj) {
 
     for (int j = 0; j < 8; j++) { // 8 pixels from left to right
             
+        int screen_x = x + j;
+        if (screen_x < 0 || screen_x >= 160) continue;
         uint8_t b_mask = 1 << (7 - j); // 00000001 -> 10000000 (7 shifts) 
         uint8_t lo = (byte1 & b_mask) >> (7 - j);
         uint8_t hi = (byte2 & b_mask) >> (7 - j);
         
         uint8_t color_code = lo | (hi << 1);
         if (is_obj == true && color_code == 0) continue;
-        framebuffer[*LY * 160 + x + j] = palette[color_code]; 
+        //framebuffer[*LY * 160 + x + j] = palette[color_code]; 
+        framebuffer[*LY * 160 + screen_x] = palette[color_code];
     }
 }
 void show_frame() {
@@ -412,6 +426,9 @@ int cpu_step(void) {
     }
     uint8_t op = rom[PC];
     if (debug) printf("0x%04X: ", PC);
+    if (PC >= 0x2B40 && PC <= 0x2B60) {
+        debug = true;
+    } else debug = false;
     switch (op) {
         case 0x00: // NOP    b1 c4 flags:----
             if (debug) printf("NOP\n");
@@ -1118,7 +1135,7 @@ int cpu_step(void) {
                    if (debug) printf("LD L, A\n");
                    L = A;
                    PC += 1;
-                   return 8;
+                   return 4;
         case 0x70: // LD [HL], B    b1 c8 flags:----
                    if (debug) printf("LD [HL], B\n");
                    mem_write8(L | (H << 8), B); 
@@ -1227,8 +1244,8 @@ int cpu_step(void) {
                    A += B;
                    if (A == 0) SETF_Z; else CLRF_Z;
                    CLRF_N;
-                   PC += 2;
-                   return 8;
+                   PC += 1;
+                   return 4;
         case 0x81: // ADD A, C    b1 c4 flags:Z0HC
                    if (debug) printf("ADD A, C\n");
                    if (A + C > 0xFF) SETF_C; else CLRF_C;
@@ -1236,8 +1253,8 @@ int cpu_step(void) {
                    A += C;
                    if (A == 0) SETF_Z; else CLRF_Z;
                    CLRF_N;
-                   PC += 2;
-                   return 8;
+                   PC += 1;
+                   return 4;
         case 0x82: // ADD A, D    b1 c4 flags:Z0HC
                    if (debug) printf("ADD A, D\n");
                    if (A + D > 0xFF) SETF_C; else CLRF_C;
@@ -1245,8 +1262,8 @@ int cpu_step(void) {
                    A += D;
                    if (A == 0) SETF_Z; else CLRF_Z;
                    CLRF_N;
-                   PC += 2;
-                   return 8;
+                   PC += 1;
+                   return 4;
         case 0x83: // ADD A, E    b1 c4 flags:Z0HC
                    if (debug) printf("ADD A, E\n");
                    if (A + E > 0xFF) SETF_C; else CLRF_C;
@@ -1254,8 +1271,8 @@ int cpu_step(void) {
                    A += E;
                    if (A == 0) SETF_Z; else CLRF_Z;
                    CLRF_N;
-                   PC += 2;
-                   return 8;
+                   PC += 1;
+                   return 4;
         case 0x84: // ADD A, H    b1 c4 flags:Z0HC
                    if (debug) printf("ADD A, H\n");
                    if (A + H > 0xFF) SETF_C; else CLRF_C;
@@ -1263,8 +1280,8 @@ int cpu_step(void) {
                    A += H;
                    if (A == 0) SETF_Z; else CLRF_Z;
                    CLRF_N;
-                   PC += 2;
-                   return 8;
+                   PC += 1;
+                   return 4;
         case 0x85: // ADD A, L    b1 c4 flags:Z0HC
                    if (debug) printf("ADD A, L\n");
                    if (A + L > 0xFF) SETF_C; else CLRF_C;
@@ -1272,8 +1289,8 @@ int cpu_step(void) {
                    A += L;
                    if (A == 0) SETF_Z; else CLRF_Z;
                    CLRF_N;
-                   PC += 2;
-                   return 8;
+                   PC += 1;
+                   return 4;
         case 0x86: // ADD A, [HL]    b1 c8 flags:Z0HC
                    n8 = rom[HL];
                    if (debug) printf("ADD A, [HL]\n");
@@ -2363,9 +2380,15 @@ void dec_reg16(uint8_t *low, uint8_t *high) {
 }
 uint8_t val_char = 0;
 void mem_write8(uint16_t addr, uint8_t b) {
+    if (addr >= 0xC000 && addr < 0xC0A0) {
+        printf("Write [0x%04X] = 0x%02X\n", addr, b);
+    }
+    if (addr >= 0xC010 && addr < 0xC020) {
+    printf("PC=0x%04X Write [0x%04X] = 0x%02X\n" , PC, addr, b);
+}
     if (addr == 0xFF46) {
-        // DMA transfer: copy 160 bytes from (value << 8) to OAM
         uint16_t src = b << 8;
+        printf("DMA from 0x%04X:\n", src);
         for (int i = 0; i < 160; i++) {
             rom[0xFE00 + i] = rom[src + i];
         }
@@ -2385,7 +2408,8 @@ void mem_write8(uint16_t addr, uint8_t b) {
         if (debug) if (debug) printf("4 KiB Work RAM (WRAM)\n");
         rom[addr] = b;
     } else if (addr < 0xFE00) {
-        if (debug) printf("Echo RAM (ignored)\n");
+        if (debug) printf("Echo RAM -> WRAM mirror\n");
+        rom[addr - 0x2000] = b;  // Mirror to WRAM (0xE000 -> 0xC000)
     } else if (addr < 0xFEA0) {
         if (debug) printf("Object attribute memory (OAM)\n");
         rom[addr] = b;
@@ -2430,6 +2454,8 @@ void mem_write16(uint16_t addr, uint16_t b) {
         rom[addr + 1] = (b >> 8) & 0xFF;
     } else if (addr < 0xFE00) {
         if (debug) printf("Echo RAM (ignored)\n");
+        rom[addr - 0x2000] = b & 0xFF;  // Mirror to WRAM (0xE000 -> 0xC000)
+        rom[addr - 0x2000 + 1] = (b >> 8) & 0xFF;  // Mirror to WRAM (0xE000 -> 0xC000)
     } else if (addr < 0xFEA0) {
         if (debug) printf("Object attribute memory (OAM)\n");
         rom[addr] = b & 0xFF;
