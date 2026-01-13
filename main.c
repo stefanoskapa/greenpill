@@ -224,7 +224,7 @@ void ppu_step() {
 
     static struct sprite intersecting_sprites[40];
     static int inter_sprite_len = 0;
-    
+
     int height = (*LCDC & 0x04) ? 16 : 8;
 
     if (dots > 0 && dots <= 80) {
@@ -237,15 +237,6 @@ void ppu_step() {
         // Object’s vertical position on the screen + 16
         *STAT = (*STAT & 0b11111100) | 0b10;  // Mode 2
         if (dots == 1) { // do all work on dot 1, then wait for the remaining dots
-            if (*LY == 0 && dots == 1) {
-    printf("OAM dump: ");
-    for (int i = 0; i < 10; i++) {
-        uint8_t y = rom[0xFE00 + i * 4];
-        uint8_t x = rom[0xFE00 + i * 4 + 1];
-        if (y != 0) printf("[%d: Y=%d X=%d] ", i, y, x);
-    }
-    printf("\n");
-}
             inter_sprite_len = 0;
 
             for (int i = 0; i < 40; i++) {
@@ -268,9 +259,11 @@ void ppu_step() {
                     intersecting_sprites[inter_sprite_len++] = object;
                 }
             }
-            if (inter_sprite_len > 0) {
-                printf("%d intersecting  objects found for line %d\n",inter_sprite_len,  *LY);
-            }
+            /*
+               if (inter_sprite_len > 0) {
+               printf("%d intersecting  objects found for line %d\n",inter_sprite_len,  *LY);
+               }
+               */
         }
 
     } else if (dots > 80 && dots <= 456) {
@@ -278,7 +271,7 @@ void ppu_step() {
         // duration: between 172 and 289
         // description: Sending pixels to the LCD (VRAM inaccessible)
         *STAT = (*STAT & 0b11111100) | 0b11;  // Mode 3
-        
+
         if (dots == 81 && *LY < 144) {
             //puts("rendering background");
             uint16_t bg_tilemap_addr;
@@ -347,17 +340,17 @@ void ppu_step() {
                     printf("Tall sprites detected!\n");
                     //exit(1);
                 }
-                
+
 
 
             }
         }
 
-                                              //artificial mode change for testing
+        //artificial mode change for testing
         if (dots > 80 + 172) {
-                              // mode 0 - Horizontal Blank
-                                              // duration: 376 - mode 3’s duration
-                                              // description: Waiting until the end of the scanline
+            // mode 0 - Horizontal Blank
+            // duration: 376 - mode 3’s duration
+            // description: Waiting until the end of the scanline
             *STAT = (*STAT & 0b11111100) | 0b00;  // Mode 0
         }
     }
@@ -382,13 +375,13 @@ void ppu_step() {
 void send_word_to_buffer(uint8_t byte1, uint8_t byte2, int x, bool is_obj) {
 
     for (int j = 0; j < 8; j++) { // 8 pixels from left to right
-            
+
         int screen_x = x + j;
         if (screen_x < 0 || screen_x >= 160) continue;
         uint8_t b_mask = 1 << (7 - j); // 00000001 -> 10000000 (7 shifts) 
         uint8_t lo = (byte1 & b_mask) >> (7 - j);
         uint8_t hi = (byte2 & b_mask) >> (7 - j);
-        
+
         uint8_t color_code = lo | (hi << 1);
         if (is_obj == true && color_code == 0) continue;
         //framebuffer[*LY * 160 + x + j] = palette[color_code]; 
@@ -425,10 +418,6 @@ int cpu_step(void) {
         ime_scheduled = false;
     }
     uint8_t op = rom[PC];
-    if (debug) printf("0x%04X: ", PC);
-    if (PC >= 0x2B40 && PC <= 0x2B60) {
-        debug = true;
-    } else debug = false;
     switch (op) {
         case 0x00: // NOP    b1 c4 flags:----
             if (debug) printf("NOP\n");
@@ -2380,15 +2369,8 @@ void dec_reg16(uint8_t *low, uint8_t *high) {
 }
 uint8_t val_char = 0;
 void mem_write8(uint16_t addr, uint8_t b) {
-    if (addr >= 0xC000 && addr < 0xC0A0) {
-        printf("Write [0x%04X] = 0x%02X\n", addr, b);
-    }
-    if (addr >= 0xC010 && addr < 0xC020) {
-    printf("PC=0x%04X Write [0x%04X] = 0x%02X\n" , PC, addr, b);
-}
     if (addr == 0xFF46) {
         uint16_t src = b << 8;
-        printf("DMA from 0x%04X:\n", src);
         for (int i = 0; i < 160; i++) {
             rom[0xFE00 + i] = rom[src + i];
         }
@@ -2441,7 +2423,7 @@ void mem_write16(uint16_t addr, uint16_t b) {
         if (debug) printf("ROM bank 1 (ignored)\n");
     } else if (addr < 0xA000) {
         if (debug)  printf("8 KiB Video RAM (VRAM)\n");
-       
+
         rom[addr] = b & 0xFF;
         rom[addr + 1] = (b >> 8) & 0xFF;
     } else if (addr < 0xC000) {
