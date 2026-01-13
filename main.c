@@ -46,6 +46,7 @@ void handle_interrupts(void);
 uint8_t *get_tile(int index);
 void show_frame();
 void send_word_to_buffer(uint8_t byte1, uint8_t byte2, int x, bool is_obj);
+void print_bin8(uint8_t v);
 
 bool debug = false;
 bool sdl_render = true;
@@ -90,6 +91,19 @@ uint8_t *STAT = &mem[0xFF41];
 uint8_t *SCY = &mem[0xFF42];
 uint8_t *SCX = &mem[0xFF43];
 
+//FF00 — P1/JOYP: Joypad
+uint8_t *JOYP = &mem[0xFF00];
+bool right = false;
+bool up = false;
+bool down = false;
+bool left = false;
+bool sel = false;
+bool a = false;
+bool b = false;
+bool start = false;
+
+
+
 
 int dots = 0;
 
@@ -106,6 +120,7 @@ int main(int argc, char **argv) {
     mem[0xFF47] = 0xFC;  // BGP palette
     mem[0xFF44] = 0;  // LY starts at 0
     SP = 0xFFFE;
+    mem[0xFF00] = 0b11111111; //reset joypad
     if (argc < 2) {
         fprintf(stderr, "No rom file was provided\n");
         exit(1);
@@ -158,12 +173,68 @@ int main(int argc, char **argv) {
     SDL_Event event;
 
     while (true) {
-
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) {
                 SDL_Quit();
                 return 0;
+            } else if (event.type == SDL_KEYDOWN) {
+                SDL_Keycode k = event.key.keysym.sym;
+                switch (k) {
+                    case SDLK_UP:    
+                        up = true;
+                        break;
+                    case SDLK_DOWN: 
+                        down = true;
+                        break;
+                    case SDLK_LEFT:  
+                        left = true;
+                        break;
+                    case SDLK_RIGHT: 
+                        right = true;
+                        break;
+                    case SDLK_s:
+                        start = true;
+                        break;
+                    case SDLK_d:
+                        sel = true;
+                        break;
+                    case SDLK_a:
+                        a = true;
+                        break;
+                    case SDLK_b:
+                        b = true;
+                        break;
+                }
+            } else if (event.type == SDL_KEYUP) {
+                SDL_Keycode k = event.key.keysym.sym;
+                switch (k) {
+                    case SDLK_UP:    
+                        up = false;
+                        break;
+                    case SDLK_DOWN: 
+                        down = false;
+                        break;
+                    case SDLK_LEFT:  
+                        left = false;
+                        break;
+                    case SDLK_RIGHT: 
+                        right = false;
+                        break;
+                    case SDLK_s:
+                        start = false;
+                        break;
+                    case SDLK_d:
+                        sel = false;
+                        break;
+                    case SDLK_a:
+                        a = false;
+                        break;
+                    case SDLK_b:
+                        b = false;
+                        break;
+                }
             }
+
         }
         cycles = cpu_step();
         if (debug) show_registers();
@@ -2230,13 +2301,15 @@ int cpu_step(void) {
 
         case 0xF0: // LDH A, <a8>
                    a8 = mem[PC + 1];
-                   if (a8 == 0x00) {
-                       // Joypad register - return 0xF in lower nibble (no buttons pressed)
-                       A = (mem[0xFF00] & 0xF0) | 0x0F;
-                   } else {
+                   
+                   //if (a8 == 0x00) {
+                       //Joypad register handling
+                   //} else {
                        A = mem[0xFF00 + a8];
-                   }
+                   //}
+                   
                    if (debug) printf("LDH A, 0x%02X\n", a8);
+
                    PC += 2;
                    return 12;
         case 0xF1: // POP AF    b1 c12 flags:ZNHC
@@ -2352,12 +2425,34 @@ void dec_reg16(uint8_t *low, uint8_t *high) {
     *high = reg >> 8;
 }
 uint8_t val_char = 0;
+void print_bin8(uint8_t v) {
+    for (int i = 7; i >= 0; --i)
+        putchar( (v & (1u << i)) ? '1' : '0' );
+}
 void mem_write8(uint16_t addr, uint8_t b) {
     if (addr == 0xFF46) {
         uint16_t src = b << 8;
         for (int i = 0; i < 160; i++) {
             mem[0xFE00 + i] = mem[src + i];
         }
+    }
+    if (addr == 0xFF00) {
+        uint8_t select = b & 0x30;   // 0b0011_0000
+        *JOYP = (*JOYP & ~0x30) | select;
+        if ((*JOYP & 0b00110000) == 0b00110000) {
+            *JOYP |= 0b00001111;
+        } else if ((*JOYP & 0b00010000) == 0){ //d-pad
+           if (right) *JOYP &= 0b11111110; else *JOYP |= 0b00000001; 
+           if (left) *JOYP &= 0b11111101; else *JOYP |= 0b00000010; 
+           if (up) *JOYP &= 0b11111011; else *JOYP |= 0b00000100; 
+           if (down) *JOYP &= 0b11110111; else *JOYP |= 0b00001000; 
+        } else if ((*JOYP & 0b00100000) == 0) { 
+           if (a) *JOYP &= 0b11111110; else *JOYP |= 0b00000001; 
+           if (b) *JOYP &= 0b11111101; else *JOYP |= 0b00000010; 
+           if (sel) *JOYP &= 0b11111011; else *JOYP |= 0b00000100; 
+           if (start) *JOYP &= 0b11110111; else *JOYP |= 0b00001000; 
+        }
+        return;
     }
     if (debug) printf("Writing to ");
     if (addr < 0x4000) {
@@ -2868,8 +2963,3 @@ void handle_interrupts(void) {
         if (debug) printf("<Joypad Interrupt>\n");
     }
 }
-// Source - https://stackoverflow.com/a
-// Posted by caf, modified by community. See post 'Timeline' for change history
-// Retrieved 2026-01-09, License - CC BY-SA 4.0
-
-
