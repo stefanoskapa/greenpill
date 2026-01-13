@@ -28,6 +28,10 @@
 #define CLRF_C F = (F & 0b11101111)
 #define READF_C ((F & 0b00010000) != 0)
 
+// Frame timing
+#define CYCLES_PER_FRAME 70224  // 154 scanlines × 456 cycles
+#define NANOS_PER_FRAME 16742706  // ~59.73 FPS
+
 int cpu_step(void);
 void ppu_steps(int cycles);
 void ppu_step();
@@ -61,12 +65,13 @@ struct sprite {
 };
 uint8_t mem[2000000];
 
+// Flags
 bool IME = false;           // Interrupt Master Enable flag (write only) IME is unset (interrupts are disabled) when the game starts running.
 bool ime_scheduled = false; 
-
 uint8_t *IE = &mem[0xFFFF]; //interrupt enable flag
 uint8_t *IF = &mem[0xFF0F]; //interrupt flag
 
+// CPU registers
 uint8_t A = 0;  // A
 uint8_t F = 0; // Flags register (can't be accesed directly)
 uint8_t B = 0; //BC high
@@ -78,23 +83,17 @@ uint8_t L = 0; // HL low
 uint16_t SP = 0;
 uint16_t PC = 0x0100;
 
-//The LCDC register (0xFF40) controls this:
-// LCDC bit 3: Background map tile selection
-//              0 = use $9800-$9BFF
-//              1 = use $9C00-$9FFF
-// LCDC bit 6: Window map tile selection (same as above)
+// PPU registers
 uint8_t *LCDC = &mem[0xFF40];
-int dots = 0;
-// LCD Y coordinate (read-only)
-//  LY can hold any value from 0 to 153, with values from 144 to 153 indicating the VBlank period.
 uint8_t *LY = &mem[0xFF44];
 uint8_t *STAT = &mem[0xFF41];
-//FF42–FF43 — SCY, SCX:
 uint8_t *SCY = &mem[0xFF42];
 uint8_t *SCX = &mem[0xFF43];
 
-int main(int argc, char **argv) {
 
+int dots = 0;
+
+int main(int argc, char **argv) {
     A = 0x01;
     F = 0xB0;
     B = 0x00;
@@ -151,11 +150,6 @@ int main(int argc, char **argv) {
                 160, 144
                 ); 
     }
-
-
-
-#define CYCLES_PER_FRAME 70224  // 154 scanlines × 456 cycles
-#define NANOS_PER_FRAME 16742706  // ~59.73 FPS
 
     uint64_t frame_cycles = 0;
     struct timespec frame_start, frame_end;
@@ -240,7 +234,7 @@ void ppu_step() {
             for (int i = 0; i < 40; i++) {
 
                 if (inter_sprite_len == 10) {
-                    printf("more than 10 objects per line found. ignoring...\n");
+                    if (debug) puts("more than 10 objects per line found. ignoring...");
                     break;
                 }
 
@@ -257,11 +251,6 @@ void ppu_step() {
                     intersecting_sprites[inter_sprite_len++] = object;
                 }
             }
-            /*
-               if (inter_sprite_len > 0) {
-               printf("%d intersecting  objects found for line %d\n",inter_sprite_len,  *LY);
-               }
-               */
         }
 
     } else if (dots > 80 && dots <= 456) {
@@ -271,7 +260,6 @@ void ppu_step() {
         *STAT = (*STAT & 0b11111100) | 0b11;  // Mode 3
 
         if (dots == 81 && *LY < 144) {
-            //puts("rendering background");
             uint16_t bg_tilemap_addr;
             if ((*LCDC & 0b00001000) == 0) {
                 bg_tilemap_addr = 0x9800;
@@ -313,7 +301,6 @@ void ppu_step() {
             //uint8_t pixel_prio_map[144] = {0};
             for (int i = inter_sprite_len - 1; i >=0; i--) {
                 struct sprite object = intersecting_sprites[i];
-                //int row_in_sprite = *LY % height; //example Ly=2 % 8 = 2, 8 % 8 = 0,etc
                 int row_in_sprite = *LY - (object.y - 16);
 
                 //get pixels from tilemaps
@@ -336,7 +323,7 @@ void ppu_step() {
                     send_word_to_buffer(byte1, byte2, object.x - 8, true);               
                 } else {
                     printf("Tall sprites detected!\n");
-                    //exit(1);
+                    exit(1);
                 }
 
 
@@ -382,7 +369,6 @@ void send_word_to_buffer(uint8_t byte1, uint8_t byte2, int x, bool is_obj) {
 
         uint8_t color_code = lo | (hi << 1);
         if (is_obj == true && color_code == 0) continue;
-        //framebuffer[*LY * 160 + x + j] = palette[color_code]; 
         framebuffer[*LY * 160 + screen_x] = palette[color_code];
     }
 }
