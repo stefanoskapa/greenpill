@@ -283,7 +283,7 @@ int main(int argc, char **argv) {
                 ); 
     }
 
-     SDL_Init(SDL_INIT_AUDIO);
+    SDL_Init(SDL_INIT_AUDIO);
 
     // the representation of our audio device in SDL:
     SDL_zero(audio_spec);
@@ -348,12 +348,12 @@ int main(int argc, char **argv) {
         frame_cycles += cycles;
         if (frame_cycles >= CYCLES_PER_FRAME) {
 
-           printf("joyp: %ld, cpu: %ld, timer: %ld, ppu: %ld, apu: %ld\n", joyp_time, cpu_time, timer_time, ppu_time, apu_time);
-     joyp_time = 0;
-     cpu_time = 0;
-     timer_time = 0;
-     ppu_time = 0;
-     apu_time = 0;
+            printf("joyp: %ld, cpu: %ld, timer: %ld, ppu: %ld, apu: %ld\n", joyp_time, cpu_time, timer_time, ppu_time, apu_time);
+            joyp_time = 0;
+            cpu_time = 0;
+            timer_time = 0;
+            ppu_time = 0;
+            apu_time = 0;
             frame_cycles -= CYCLES_PER_FRAME;
 
             clock_gettime(CLOCK_MONOTONIC, &frame_end);
@@ -2410,13 +2410,13 @@ int cpu_step(void) {
 
         case 0xF0: // LDH A, <a8>
                    a8 = mem[PC + 1];
-                   
+
                    //if (a8 == 0x00) {
-                       //Joypad register handling
+                   //Joypad register handling
                    //} else {
-                       A = mem[0xFF00 + a8];
+                   A = mem[0xFF00 + a8];
                    //}
-                   
+
                    if (debug) printf("LDH A, 0x%02X\n", a8);
 
                    PC += 2;
@@ -2551,15 +2551,15 @@ void mem_write8(uint16_t addr, uint8_t b) {
         if ((*JOYP & 0b00110000) == 0b00110000) {
             *JOYP |= 0b00001111;
         } else if ((*JOYP & 0b00010000) == 0){ //d-pad
-           if (right) *JOYP &= 0b11111110; else *JOYP |= 0b00000001; 
-           if (left) *JOYP &= 0b11111101; else *JOYP |= 0b00000010; 
-           if (up) *JOYP &= 0b11111011; else *JOYP |= 0b00000100; 
-           if (down) *JOYP &= 0b11110111; else *JOYP |= 0b00001000; 
+            if (right) *JOYP &= 0b11111110; else *JOYP |= 0b00000001; 
+            if (left) *JOYP &= 0b11111101; else *JOYP |= 0b00000010; 
+            if (up) *JOYP &= 0b11111011; else *JOYP |= 0b00000100; 
+            if (down) *JOYP &= 0b11110111; else *JOYP |= 0b00001000; 
         } else if ((*JOYP & 0b00100000) == 0) { 
-           if (a) *JOYP &= 0b11111110; else *JOYP |= 0b00000001; 
-           if (b) *JOYP &= 0b11111101; else *JOYP |= 0b00000010; 
-           if (sel) *JOYP &= 0b11111011; else *JOYP |= 0b00000100; 
-           if (start) *JOYP &= 0b11110111; else *JOYP |= 0b00001000; 
+            if (a) *JOYP &= 0b11111110; else *JOYP |= 0b00000001; 
+            if (b) *JOYP &= 0b11111101; else *JOYP |= 0b00000010; 
+            if (sel) *JOYP &= 0b11111011; else *JOYP |= 0b00000100; 
+            if (start) *JOYP &= 0b11110111; else *JOYP |= 0b00001000; 
         }
         return;
     }
@@ -2570,31 +2570,31 @@ void mem_write8(uint16_t addr, uint8_t b) {
         if ((*NR52 & 0b10000000) == 0) {
             channel2_playing = false;
         } else 
-        
+
             if ((*NR22 & 0xF8) == 0) { //DAC is turned off
-            /*
-            A channel can be deactivated in one of the following ways:
-            Turning off its DAC
-            Its length timer expiring
-            (CH1 only) Frequency sweep overflowing the frequency
-            */
-            channel2_playing = false;
-        } else if ((b & 0b10000000) != 0) {
+                /*
+                   A channel can be deactivated in one of the following ways:
+                   Turning off its DAC
+                   Its length timer expiring
+                   (CH1 only) Frequency sweep overflowing the frequency
+                   */
+                channel2_playing = false;
+            } else if ((b & 0b10000000) != 0) {
 
-            uint8_t initial_volume = (*NR22 & 0b11110000) >> 4;
-            channel2_volume = initial_volume;
-            channel2_playing = true;
-            channel2_phase = 0;
-            uint16_t period = *NR23; 
+                uint8_t initial_volume = (*NR22 & 0b11110000) >> 4;
+                channel2_volume = initial_volume;
+                channel2_playing = true;
+                channel2_phase = 0;
+                uint16_t period = *NR23; 
 
-            uint16_t ph = b & 0b00000111;
-            ph = ph << 8;
-            period |= ph;
-            double frequency = (double)131072 / (2048 - period);
-            channel2_phase_increment = frequency / 44100.0f;
-        
+                uint16_t ph = b & 0b00000111;
+                ph = ph << 8;
+                period |= ph;
+                double frequency = (double)131072 / (2048 - period);
+                channel2_phase_increment = frequency / 44100.0f;
 
-        }
+
+            }
     }
 
     if (debug) printf("Writing to ");
@@ -3126,7 +3126,7 @@ void apu_step(int cycles) {
 
 
 void chan2debug(uint8_t nr24) {
-    
+
     return;
     puts("---Channel 2 debug---");
     if ((*NR52 & 0b10000000) == 0) {
@@ -3165,66 +3165,66 @@ void chan2debug(uint8_t nr24) {
 void check_joyp() {
 
 
-        while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_QUIT) {
-                SDL_Quit();
-                exit(1);
-            } else if (event.type == SDL_KEYDOWN) {
-                SDL_Keycode k = event.key.keysym.sym;
-                switch (k) {
-                    case SDLK_UP:    
-                        up = true;
-                        break;
-                    case SDLK_DOWN: 
-                        down = true;
-                        break;
-                    case SDLK_LEFT:  
-                        left = true;
-                        break;
-                    case SDLK_RIGHT: 
-                        right = true;
-                        break;
-                    case SDLK_s:
-                        start = true;
-                        break;
-                    case SDLK_d:
-                        sel = true;
-                        break;
-                    case SDLK_a:
-                        a = true;
-                        break;
-                    case SDLK_b:
-                        b = true;
-                        break;
-                }
-            } else if (event.type == SDL_KEYUP) {
-                SDL_Keycode k = event.key.keysym.sym;
-                switch (k) {
-                    case SDLK_UP:    
-                        up = false;
-                        break;
-                    case SDLK_DOWN: 
-                        down = false;
-                        break;
-                    case SDLK_LEFT:  
-                        left = false;
-                        break;
-                    case SDLK_RIGHT: 
-                        right = false;
-                        break;
-                    case SDLK_s:
-                        start = false;
-                        break;
-                    case SDLK_d:
-                        sel = false;
-                        break;
-                    case SDLK_a:
-                        a = false;
-                        break;
-                    case SDLK_b:
-                        b = false;
-                        break;
-                }
+    while (SDL_PollEvent(&event)) {
+        if (event.type == SDL_QUIT) {
+            SDL_Quit();
+            exit(1);
+        } else if (event.type == SDL_KEYDOWN) {
+            SDL_Keycode k = event.key.keysym.sym;
+            switch (k) {
+                case SDLK_UP:    
+                    up = true;
+                    break;
+                case SDLK_DOWN: 
+                    down = true;
+                    break;
+                case SDLK_LEFT:  
+                    left = true;
+                    break;
+                case SDLK_RIGHT: 
+                    right = true;
+                    break;
+                case SDLK_s:
+                    start = true;
+                    break;
+                case SDLK_d:
+                    sel = true;
+                    break;
+                case SDLK_a:
+                    a = true;
+                    break;
+                case SDLK_b:
+                    b = true;
+                    break;
+            }
+        } else if (event.type == SDL_KEYUP) {
+            SDL_Keycode k = event.key.keysym.sym;
+            switch (k) {
+                case SDLK_UP:    
+                    up = false;
+                    break;
+                case SDLK_DOWN: 
+                    down = false;
+                    break;
+                case SDLK_LEFT:  
+                    left = false;
+                    break;
+                case SDLK_RIGHT: 
+                    right = false;
+                    break;
+                case SDLK_s:
+                    start = false;
+                    break;
+                case SDLK_d:
+                    sel = false;
+                    break;
+                case SDLK_a:
+                    a = false;
+                    break;
+                case SDLK_b:
+                    b = false;
+                    break;
             }
         }
+    }
 }
