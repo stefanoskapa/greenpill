@@ -55,7 +55,9 @@ void show_frame();
 void send_word_to_buffer(uint8_t byte1, uint8_t byte2, int x, bool is_obj);
 void print_bin8(uint8_t v);
 //void play_sound(int freq, int amplitude, double sec);
+void check_joyp();
 
+SDL_Event event;
 bool debug = false;
 bool sdl_render = true;
 uint32_t framebuffer[160 * 144];
@@ -299,88 +301,59 @@ int main(int argc, char **argv) {
     struct timespec frame_start, frame_end;
 
     clock_gettime(CLOCK_MONOTONIC, &frame_start);
-    SDL_Event event;
 
     unsigned long long apu_cycles = 0;
-    while (true) {
-        while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_QUIT) {
-                SDL_Quit();
-                return 0;
-            } else if (event.type == SDL_KEYDOWN) {
-                SDL_Keycode k = event.key.keysym.sym;
-                switch (k) {
-                    case SDLK_UP:    
-                        up = true;
-                        break;
-                    case SDLK_DOWN: 
-                        down = true;
-                        break;
-                    case SDLK_LEFT:  
-                        left = true;
-                        break;
-                    case SDLK_RIGHT: 
-                        right = true;
-                        break;
-                    case SDLK_s:
-                        start = true;
-                        break;
-                    case SDLK_d:
-                        sel = true;
-                        break;
-                    case SDLK_a:
-                        a = true;
-                        break;
-                    case SDLK_b:
-                        b = true;
-                        break;
-                }
-            } else if (event.type == SDL_KEYUP) {
-                SDL_Keycode k = event.key.keysym.sym;
-                switch (k) {
-                    case SDLK_UP:    
-                        up = false;
-                        break;
-                    case SDLK_DOWN: 
-                        down = false;
-                        break;
-                    case SDLK_LEFT:  
-                        left = false;
-                        break;
-                    case SDLK_RIGHT: 
-                        right = false;
-                        break;
-                    case SDLK_s:
-                        start = false;
-                        break;
-                    case SDLK_d:
-                        sel = false;
-                        break;
-                    case SDLK_a:
-                        a = false;
-                        break;
-                    case SDLK_b:
-                        b = false;
-                        break;
-                }
-            }
+    struct timespec t1, t2;
 
-        }
+    long joyp_time = 0;
+    long cpu_time = 0;
+    long timer_time = 0;
+    long ppu_time = 0;
+    long apu_time = 0;
+    while (true) {
+
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        if (frame_cycles == 0) check_joyp();
+        clock_gettime(CLOCK_MONOTONIC, &t2);
+        joyp_time += (t2.tv_sec - t1.tv_sec) * 1000000000L + (t2.tv_nsec - t1.tv_nsec);
+
+        clock_gettime(CLOCK_MONOTONIC, &t1);
         cycles = cpu_step();
         if (debug) show_registers();
+        clock_gettime(CLOCK_MONOTONIC, &t2);
+        cpu_time += (t2.tv_sec - t1.tv_sec) * 1000000000L + (t2.tv_nsec - t1.tv_nsec);
 
+        clock_gettime(CLOCK_MONOTONIC, &t1);
         timer_step(cycles);
+        clock_gettime(CLOCK_MONOTONIC, &t2);
+        timer_time += (t2.tv_sec - t1.tv_sec) * 1000000000L + (t2.tv_nsec - t1.tv_nsec);
 
         if (IME == true) {
             handle_interrupts();
         }
+
+        clock_gettime(CLOCK_MONOTONIC, &t1);
         ppu_steps(cycles);
+        clock_gettime(CLOCK_MONOTONIC, &t2);
+        ppu_time += (t2.tv_sec - t1.tv_sec) * 1000000000L + (t2.tv_nsec - t1.tv_nsec);
 
 
+        clock_gettime(CLOCK_MONOTONIC, &t1);
         apu_step(cycles);
+        clock_gettime(CLOCK_MONOTONIC, &t2);
+        apu_time += (t2.tv_sec - t1.tv_sec) * 1000000000L + (t2.tv_nsec - t1.tv_nsec);
+
+
+
         frame_cycles += cycles;
         if (frame_cycles >= CYCLES_PER_FRAME) {
 
+           printf("joyp: %ld, cpu: %ld, timer: %ld, ppu: %ld, apu: %ld\n", joyp_time, cpu_time, timer_time, ppu_time, apu_time);
+     joyp_time = 0;
+     cpu_time = 0;
+     timer_time = 0;
+     ppu_time = 0;
+     apu_time = 0;
             frame_cycles -= CYCLES_PER_FRAME;
 
             clock_gettime(CLOCK_MONOTONIC, &frame_end);
@@ -391,6 +364,9 @@ int main(int argc, char **argv) {
             if (remaining > 0) {
                 struct timespec sleep_time = {0, remaining};
                 nanosleep(&sleep_time, NULL);
+            }  else if (remaining < 0) {
+                printf("Can't compensate for %ld nanoseconds\n", remaining);
+                exit(1);
             }
 
             clock_gettime(CLOCK_MONOTONIC, &frame_start);
@@ -2618,12 +2594,6 @@ void mem_write8(uint16_t addr, uint8_t b) {
             channel2_phase_increment = frequency / 44100.0f;
         
 
-        bool length_enable = (b & 0b01000000) != 0;         
-        if (length_enable) {
-            puts("length bit is set");
-        } else {
-            puts("length bit is not set");
-        }
         }
     }
 
@@ -3157,6 +3127,7 @@ void apu_step(int cycles) {
 
 void chan2debug(uint8_t nr24) {
     
+    return;
     puts("---Channel 2 debug---");
     if ((*NR52 & 0b10000000) == 0) {
         puts("APU is OFF");
@@ -3177,12 +3148,83 @@ void chan2debug(uint8_t nr24) {
     //NR21
     uint8_t initial_length = *NR21 & 0b00111111;
     uint8_t wave_duty = (*NR21 & 0b11000000) >> 6;
-    printf("NR21 { wave_duty=%d, initial_length=%d\n",wave_duty, initial_length); 
+    printf("NR21: wave_duty=%d, initial_length=%d\n",wave_duty, initial_length); 
 
     //NR22
     uint8_t initial_volume = (*NR22 & 0b11110000) >> 4;
     uint8_t env_dir = (*NR22 & 0b00001000) >> 3;
     uint8_t sweep_pace = (*NR22 & 0b00000111);
-    printf("NR22 {initial_volume=%d, envelope_direction=%d, sweep_pace=%d\n", initial_volume, env_dir, sweep_pace);
+    printf("NR22: initial_volume=%d, envelope_direction=%d, sweep_pace=%d\n", initial_volume, env_dir, sweep_pace);
 
+    //NR24
+    uint8_t trigger = (nr24 & 0b10000000) >> 7;
+    uint8_t length_enable = (nr24 & 0b01000000) >> 6;
+    printf("NR24: trigger=%d, length_enable=%d\n", trigger, length_enable);
+}
+
+void check_joyp() {
+
+
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_QUIT) {
+                SDL_Quit();
+                exit(1);
+            } else if (event.type == SDL_KEYDOWN) {
+                SDL_Keycode k = event.key.keysym.sym;
+                switch (k) {
+                    case SDLK_UP:    
+                        up = true;
+                        break;
+                    case SDLK_DOWN: 
+                        down = true;
+                        break;
+                    case SDLK_LEFT:  
+                        left = true;
+                        break;
+                    case SDLK_RIGHT: 
+                        right = true;
+                        break;
+                    case SDLK_s:
+                        start = true;
+                        break;
+                    case SDLK_d:
+                        sel = true;
+                        break;
+                    case SDLK_a:
+                        a = true;
+                        break;
+                    case SDLK_b:
+                        b = true;
+                        break;
+                }
+            } else if (event.type == SDL_KEYUP) {
+                SDL_Keycode k = event.key.keysym.sym;
+                switch (k) {
+                    case SDLK_UP:    
+                        up = false;
+                        break;
+                    case SDLK_DOWN: 
+                        down = false;
+                        break;
+                    case SDLK_LEFT:  
+                        left = false;
+                        break;
+                    case SDLK_RIGHT: 
+                        right = false;
+                        break;
+                    case SDLK_s:
+                        start = false;
+                        break;
+                    case SDLK_d:
+                        sel = false;
+                        break;
+                    case SDLK_a:
+                        a = false;
+                        break;
+                    case SDLK_b:
+                        b = false;
+                        break;
+                }
+            }
+        }
 }
