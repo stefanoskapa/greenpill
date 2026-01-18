@@ -209,10 +209,12 @@ SDL_AudioSpec audio_spec;
 int sample_counter = 0;
 int dots = 0;
 
-bool channel2_playing = false;
-double frequency;
-double phase_increment;
+bool channel1_playing = false;
+uint8_t channel1_volume = 0;
+float channel1_phase = 0;
+float channel1_phase_increment = 0;
 
+bool channel2_playing = false;
 uint8_t channel2_volume = 0;
 float channel2_phase = 0;
 float channel2_phase_increment = 0;
@@ -313,7 +315,7 @@ int main(int argc, char **argv) {
     while (true) {
 
         clock_gettime(CLOCK_MONOTONIC, &t1);
-        if (frame_cycles == 0) check_joyp();
+        if (frame_cycles < cycles) check_joyp();
         clock_gettime(CLOCK_MONOTONIC, &t2);
         joyp_time += (t2.tv_sec - t1.tv_sec) * 1000000000L + (t2.tv_nsec - t1.tv_nsec);
 
@@ -2566,20 +2568,12 @@ void mem_write8(uint16_t addr, uint8_t b) {
 
     // Channel 2 square wave
     if (addr == 0xFF19) { // channel 2 period high & control register (NR24) 
-        chan2debug(b);
+        //chan2debug(b);
         if ((*NR52 & 0b10000000) == 0) {
             channel2_playing = false;
-        } else 
-
-            if ((*NR22 & 0xF8) == 0) { //DAC is turned off
-                /*
-                   A channel can be deactivated in one of the following ways:
-                   Turning off its DAC
-                   Its length timer expiring
-                   (CH1 only) Frequency sweep overflowing the frequency
-                   */
+        } else if ((*NR22 & 0xF8) == 0) { //DAC is turned off
                 channel2_playing = false;
-            } else if ((b & 0b10000000) != 0) {
+        } else if ((b & 0b10000000) != 0) {
 
                 uint8_t initial_volume = (*NR22 & 0b11110000) >> 4;
                 channel2_volume = initial_volume;
@@ -2597,6 +2591,25 @@ void mem_write8(uint16_t addr, uint8_t b) {
             }
     }
 
+    if (addr == 0xFF14) { // channel 1 period high & control register (NR24) 
+        if ((*NR52 & 0b10000000) == 0) {
+            channel1_playing = false;
+        } else if ((*NR12 & 0xF8) == 0) { //DAC is turned off
+                channel1_playing = false;
+        } else if ((b & 0b10000000) != 0) {
+                uint8_t initial_volume = (*NR12 & 0b11110000) >> 4;
+                channel1_volume = initial_volume;
+                channel1_playing = true;
+                channel1_phase = 0;
+                uint16_t period = *NR13; 
+
+                uint16_t ph = b & 0b00000111;
+                ph = ph << 8;
+                period |= ph;
+                double frequency = (double)131072 / (2048 - period);
+                channel1_phase_increment = frequency / 44100.0f;
+            }
+    }
     if (debug) printf("Writing to ");
     if (addr < 0x4000) {
         if (debug)   printf("ROM bank 0 (ignored)\n");
@@ -3115,8 +3128,14 @@ void apu_step(int cycles) {
         sample_counter -= 95;
 
         int16_t sample = 0;
+        if (channel1_playing) {
+            sample += (channel1_phase < 0.5f) ? channel1_volume * 200 : channel1_volume * (-200);
+            channel1_phase += channel1_phase_increment;
+            if (channel1_phase >= 1.0f) channel1_phase -= 1.0f;
+        }
+
         if (channel2_playing) {
-            sample = (channel2_phase < 0.5f) ? channel2_volume * 200 : channel2_volume * (-200);
+            sample += (channel2_phase < 0.5f) ? channel2_volume * 200 : channel2_volume * (-200);
             channel2_phase += channel2_phase_increment;
             if (channel2_phase >= 1.0f) channel2_phase -= 1.0f;
         }
