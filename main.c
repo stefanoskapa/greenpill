@@ -32,8 +32,14 @@
 #define CYCLES_PER_FRAME 70224  // 154 scanlines × 456 cycles
 #define NANOS_PER_FRAME 16742706  // ~59.73 FPS
 
+#define SAMPLE_RATE 48000
+#define AMPLITUDE   28000
+
+//void audio_step();
+//void play(float frequency, double duration);
 int cpu_step(void);
 void ppu_steps(int cycles);
+void apu_step(int cycles);
 void ppu_step();
 void show_registers(void);
 void show_cartridge_info();
@@ -47,6 +53,7 @@ uint8_t *get_tile(int index);
 void show_frame();
 void send_word_to_buffer(uint8_t byte1, uint8_t byte2, int x, bool is_obj);
 void print_bin8(uint8_t v);
+//void play_sound(int freq, int amplitude, double sec);
 
 bool debug = false;
 bool sdl_render = true;
@@ -81,8 +88,8 @@ uint8_t D = 0; // DE high
 uint8_t E = 0; // DE low
 uint8_t H = 0; // HL high
 uint8_t L = 0; // HL low
-uint16_t SP = 0;
-uint16_t PC = 0x0100;
+uint16_t SP;
+uint16_t PC;
 
 // PPU registers
 uint8_t *LCDC = &mem[0xFF40];
@@ -90,6 +97,96 @@ uint8_t *LY = &mem[0xFF44];
 uint8_t *STAT = &mem[0xFF41];
 uint8_t *SCY = &mem[0xFF42];
 uint8_t *SCX = &mem[0xFF43];
+
+
+// APU registers
+
+// FF25 — NR51: 
+
+/*
+ * Sound Panning
+ * - bit0: CH1 right
+ * - bit1: CH2 right
+ * - bit2: CH3 right
+ * - bit3: CH4 right
+ * - bit4: CH1 left
+ * - bit5: CH2 left
+ * - bit6: CH3 left
+ * - bit7: CH4 left
+ */
+uint8_t *NR51 = &mem[0xFF25];
+
+/*
+ * Audio master control
+ * - bit0: Ch1 on? (read only)
+ * - bit1: Ch2 on? (read only)
+ * - bit2: Ch3 on? (read only)
+ * - bit3: Ch4 on? (read only)
+ * - bit4: 
+ * - bit5: 
+ * - bit6: 
+ * - bit7: Audio On/Off
+ **/
+uint8_t *NR52 = &mem[0xFF26]; 
+
+/*
+ * NR11 - Channel 1 length timer & duty cycle
+ * - 0-5: Initial length timer (write only)
+ * - 6-7: Wave Duty
+ **/
+uint8_t *NR11 = &mem[0xFF11];
+
+/*
+ * NR12 - Channel 1 volume & envelope
+ * - 0-2: Sweep pace
+ * - 3  : env dir
+ * - 4-7: Initial volume
+ **/
+uint8_t *NR12 = &mem[0xFF12];
+
+/*
+ * NR13 - Channel 1 period low
+ **/
+uint8_t *NR13 = &mem[0xFF13];
+
+/*
+ * NR14 - Channel 1 period high and control
+ * - 0-2: period
+ * - 6  : length enable
+ * - 7  : Trigger
+ **/
+uint8_t *NR14 = &mem[0xFF14];
+
+
+
+/*
+ * NR21 - Channel 2 length timer & duty cycle
+ * - 0-5: Initial length timer (write only)
+ * - 6-7: Wave Duty
+ **/
+uint8_t *NR21 = &mem[0xFF16];
+
+/*
+ * NR22 - Channel 2 volume & envelope
+ * - 0-2: Sweep pace
+ * - 3  : env dir
+ * - 4-7: Initial volume
+ **/
+uint8_t *NR22 = &mem[0xFF17];
+
+/*
+ * NR23 - Channel 2 period low
+ **/
+uint8_t *NR23 = &mem[0xFF18];
+
+/*
+ * NR24 - Channel 2 period high and control
+ * - 0-2: period
+ * - 6  : length enable
+ * - 7  : Trigger
+ **/
+uint8_t *NR24 = &mem[0xFF19];
+
 
 //FF00 — P1/JOYP: Joypad
 uint8_t *JOYP = &mem[0xFF00];
@@ -103,9 +200,24 @@ bool b = false;
 bool start = false;
 
 
+SDL_AudioDeviceID audio_device;
+SDL_AudioSpec audio_spec;
 
-
+int sample_counter = 0;
 int dots = 0;
+
+bool channel2_playing = false;
+double frequency;
+double phase_increment;
+
+float channel2_phase = 0;
+float channel2_phase_increment = 0;
+
+
+
+
+
+
 
 int main(int argc, char **argv) {
     A = 0x01;
@@ -115,7 +227,11 @@ int main(int argc, char **argv) {
     D = 0x00;
     E = 0xD8;
     H = 0x01;
+
     L = 0x4D;
+    PC = 0x0000;
+    //PC = 0x0100;
+    SP = 0x0000;
     mem[0xFF40] = 0x91;  // LCDC - LCD ON!
     mem[0xFF47] = 0xFC;  // BGP palette
     mem[0xFF44] = 0;  // LY starts at 0
@@ -154,9 +270,11 @@ int main(int argc, char **argv) {
                 "GB Emulator",
                 SDL_WINDOWPOS_CENTERED,
                 SDL_WINDOWPOS_CENTERED,
-                160 * 3, 144 * 3,
+                160 * 5, 144 * 5,
                 SDL_WINDOW_SHOWN
                 );
+
+
         renderer = SDL_CreateRenderer(window, -1, 0);
         texture = SDL_CreateTexture(
                 renderer,
@@ -166,12 +284,27 @@ int main(int argc, char **argv) {
                 ); 
     }
 
+     SDL_Init(SDL_INIT_AUDIO);
+
+    // the representation of our audio device in SDL:
+    SDL_zero(audio_spec);
+    audio_spec.freq = 44100;
+    audio_spec.format = AUDIO_S16SYS;
+    audio_spec.channels = 1;
+    audio_spec.samples = 1024;
+    audio_spec.callback = NULL;
+
+    audio_device = SDL_OpenAudioDevice(NULL, 0, &audio_spec, NULL, 0);
+    SDL_PauseAudioDevice(audio_device, 0);
+
+
     uint64_t frame_cycles = 0;
     struct timespec frame_start, frame_end;
 
     clock_gettime(CLOCK_MONOTONIC, &frame_start);
     SDL_Event event;
 
+    unsigned long long apu_cycles = 0;
     while (true) {
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) {
@@ -246,8 +379,11 @@ int main(int argc, char **argv) {
         }
         ppu_steps(cycles);
 
+
+        apu_step(cycles);
         frame_cycles += cycles;
         if (frame_cycles >= CYCLES_PER_FRAME) {
+
             frame_cycles -= CYCLES_PER_FRAME;
 
             clock_gettime(CLOCK_MONOTONIC, &frame_end);
@@ -2454,6 +2590,35 @@ void mem_write8(uint16_t addr, uint8_t b) {
         }
         return;
     }
+
+
+    // Channel 2 square wave
+    if (addr == 0xFF19) {
+        uint16_t period = *NR23; 
+        uint16_t ph = b & 0b00000111;
+        ph = ph << 8;
+        period |= ph;
+        double frequency = (double)131072 / (2048 - period);
+
+        bool length_enable = (*NR24 & 0b01000000) != 0; 
+        if (length_enable) {
+            uint8_t sound_length = *NR21 & 0b00111111; 
+            double duration = (64 - sound_length) / 256.0f; // duration in seconds
+        } else {
+            printf("length bit not set\n");
+        }
+        if ((b & 0b10000000) == 0) {
+            puts("channel 2 OFF");
+            channel2_playing = false;
+        } else {
+            puts("channel 2 ON");
+            channel2_playing = true;
+            channel2_phase = 0;
+            channel2_phase_increment = frequency / 44100.0f;
+        }
+
+    }
+
     if (debug) printf("Writing to ");
     if (addr < 0x4000) {
         if (debug)   printf("ROM bank 0 (ignored)\n");
@@ -2961,5 +3126,22 @@ void handle_interrupts(void) {
         mem_write16(SP, PC);
         PC = 0x60;
         if (debug) printf("<Joypad Interrupt>\n");
+    }
+}
+
+
+
+void apu_step(int cycles) {
+    sample_counter += cycles;
+    while (sample_counter >= 95) {
+        sample_counter -= 95;
+
+        int16_t sample = 0;
+        if (channel2_playing) {
+            sample = (channel2_phase < 0.5f) ? 5000 : -5000;
+            channel2_phase += channel2_phase_increment;
+            if (channel2_phase >= 1.0f) channel2_phase -= 1.0f;
+        }
+        SDL_QueueAudio(audio_device, &sample, sizeof(sample));
     }
 }
