@@ -30,13 +30,16 @@
 
 // Frame timing
 #define CYCLES_PER_FRAME 70224  // 154 scanlines × 456 cycles
-#define NANOS_PER_FRAME 16742706  // ~59.73 FPS
+/*
+ * A frame is not exactly one 60th of a second: the Game Boy 
+ * runs slightly slower than 60 Hz, as one frame takes ~16.74 ms 
+ * instead of ~16.67 (the error is 0.45%).
+ */
+#define NANOS_PER_FRAME 16742706 
 
 #define SAMPLE_RATE 48000
 #define AMPLITUDE   28000
 
-//void audio_step();
-//void play(float frequency, double duration);
 int cpu_step(void);
 void chan2debug(uint8_t nr24);
 void ppu_steps(int cycles);
@@ -54,7 +57,6 @@ uint8_t *get_tile(int index);
 void show_frame();
 void send_word_to_buffer(uint8_t byte1, uint8_t byte2, int x, bool is_obj);
 void print_bin8(uint8_t v);
-//void play_sound(int freq, int amplitude, double sec);
 void check_joyp();
 
 SDL_Event event;
@@ -66,11 +68,21 @@ SDL_Renderer *renderer;
 SDL_Texture *texture;
 
 uint32_t palette[4] = {
+    0xFF9A9E3F,  // Lightest (color 0)
+    0xFF496B22,  // Light (color 1)
+    0xFF0E450B,  // Dark (color 2)
+    0xFF1B2A09   // Darkest (color 3)
+};
+/*
+uint32_t palette[4] = {
+
     0xFFE0F8D0,  // Lightest (color 0) - white/light green
     0xFF88C070,  // Light (color 1)
     0xFF346856,  // Dark (color 2)
     0xFF081820   // Darkest (color 3) - black/dark green
+                 //
 };
+*/
 struct sprite {
     uint8_t y, x, tile, flags;
 };
@@ -202,11 +214,11 @@ bool a = false;
 bool b = false;
 bool start = false;
 
+struct timespec frame_start, frame_end;
 
 SDL_AudioDeviceID audio_device;
 SDL_AudioSpec audio_spec;
 
-int sample_counter = 0;
 int dots = 0;
 
 bool channel1_playing = false;
@@ -230,8 +242,8 @@ int main(int argc, char **argv) {
     H = 0x01;
 
     L = 0x4D;
-    PC = 0x0000;
-    //PC = 0x0100;
+    //PC = 0x0000;
+    PC = 0x0100;
     SP = 0x0000;
     mem[0xFF40] = 0x91;  // LCDC - LCD ON!
     mem[0xFF47] = 0xFC;  // BGP palette
@@ -300,57 +312,34 @@ int main(int argc, char **argv) {
 
 
     uint64_t frame_cycles = 0;
-    struct timespec frame_start, frame_end;
 
-    clock_gettime(CLOCK_MONOTONIC, &frame_start);
 
     unsigned long long apu_cycles = 0;
-    struct timespec t1, t2;
-
     long joyp_time = 0;
     long cpu_time = 0;
     long timer_time = 0;
     long ppu_time = 0;
     long apu_time = 0;
+    clock_gettime(CLOCK_MONOTONIC, &frame_start);
     while (true) {
 
-        clock_gettime(CLOCK_MONOTONIC, &t1);
-        if (frame_cycles < cycles) check_joyp();
-        clock_gettime(CLOCK_MONOTONIC, &t2);
-        joyp_time += (t2.tv_sec - t1.tv_sec) * 1000000000L + (t2.tv_nsec - t1.tv_nsec);
+        check_joyp();
 
-        clock_gettime(CLOCK_MONOTONIC, &t1);
         cycles = cpu_step();
         if (debug) show_registers();
-        clock_gettime(CLOCK_MONOTONIC, &t2);
-        cpu_time += (t2.tv_sec - t1.tv_sec) * 1000000000L + (t2.tv_nsec - t1.tv_nsec);
 
-        clock_gettime(CLOCK_MONOTONIC, &t1);
         timer_step(cycles);
-        clock_gettime(CLOCK_MONOTONIC, &t2);
-        timer_time += (t2.tv_sec - t1.tv_sec) * 1000000000L + (t2.tv_nsec - t1.tv_nsec);
 
         if (IME == true) {
             handle_interrupts();
         }
 
-        clock_gettime(CLOCK_MONOTONIC, &t1);
         ppu_steps(cycles);
-        clock_gettime(CLOCK_MONOTONIC, &t2);
-        ppu_time += (t2.tv_sec - t1.tv_sec) * 1000000000L + (t2.tv_nsec - t1.tv_nsec);
 
-
-        clock_gettime(CLOCK_MONOTONIC, &t1);
         apu_step(cycles);
-        clock_gettime(CLOCK_MONOTONIC, &t2);
-        apu_time += (t2.tv_sec - t1.tv_sec) * 1000000000L + (t2.tv_nsec - t1.tv_nsec);
-
-
 
         frame_cycles += cycles;
         if (frame_cycles >= CYCLES_PER_FRAME) {
-
-            printf("joyp: %ld, cpu: %ld, timer: %ld, ppu: %ld, apu: %ld\n", joyp_time, cpu_time, timer_time, ppu_time, apu_time);
             joyp_time = 0;
             cpu_time = 0;
             timer_time = 0;
@@ -358,25 +347,15 @@ int main(int argc, char **argv) {
             apu_time = 0;
             frame_cycles -= CYCLES_PER_FRAME;
 
-            clock_gettime(CLOCK_MONOTONIC, &frame_end);
-            long elapsed = (frame_end.tv_sec - frame_start.tv_sec) * 1000000000L
-                + (frame_end.tv_nsec - frame_start.tv_nsec);
-            long remaining = NANOS_PER_FRAME - elapsed;
-
-            if (remaining > 0) {
-                struct timespec sleep_time = {0, remaining};
-                nanosleep(&sleep_time, NULL);
-            }  else if (remaining < 0) {
-                printf("Can't compensate for %ld nanoseconds\n", remaining);
-                exit(1);
+            while (SDL_GetQueuedAudioSize(audio_device) > 4000) {
+                SDL_Delay(1);
             }
-
-            clock_gettime(CLOCK_MONOTONIC, &frame_start);
         }
     }
 
     return EXIT_SUCCESS;
 }
+
 /*
    Game Boy resolution: 160x144
    A "dot" = 222 Hz (≅ 4.194 MHz) time unit. 4 dots / M-cycle
@@ -572,8 +551,15 @@ uint8_t *get_tile(int index) {
     memcpy(&tile, mem + index * 16, 16);
     return tile;
 }
-
+bool halted = false;
 int cpu_step(void) {
+    if (halted) {
+        // Check if any interrupt can wake us up
+        if (*IF & *IE & 0x1F) {
+            halted = false;
+        }
+        return 4;  // Still consume cycles while halted
+    }
     uint8_t n8 = 0;   // 8-bit integer signed or unsigned
     uint16_t n16 = 0; // 16-bit integer signed or unsigned
     int8_t e8 = 0;    // 8-bit signed offset!
@@ -1323,31 +1309,8 @@ int cpu_step(void) {
                    return 8;
         case 0x76: // HALT    b1 c4 flags:----
                    if (debug) printf("HALT\n");
-                   printf("HALT: IME=%d IE=%02X IF=%02X\n", IME, mem[0xFFFF], mem[0xFF0F]);
-                   exit(1);
-                   {
-
-                       if (IME) {
-                           // IME set: wait for interrupt, handler will be called
-                           while ((*IE & *IF & 0x1F) == 0) {
-                               timer_step(4);
-                               ppu_steps(4);
-                           }
-                           PC += 1;
-                       } else if ((*IE & *IF & 0x1F) == 0) {
-                           // IME not set, no interrupt pending: wait, but handler won't be called
-                           while ((*IE & *IF & 0x1F) == 0) {
-                               timer_step(4);
-                               ppu_steps(4);
-                           }
-                           PC += 1;
-                       } else {
-                           // IME not set, interrupt pending: HALT bug - don't increment PC
-                           // Next byte will be read twice
-                           PC += 1;  // Don't increment - this is the HALT bug
-                       }
-                   }
-                   return 4;
+                    halted = true;
+                    return 4;
         case 0x77: // LD [HL], A    b1 c8 flags:----
                    if (debug) printf("LD [HL], A\n");
                    mem_write8(L | (H << 8), A); 
@@ -3122,10 +3085,13 @@ void handle_interrupts(void) {
 
 
 
+float sample_counter = 0;
+const float cycles_per_sample = 4194304.0f / 44100.0f;
+
 void apu_step(int cycles) {
     sample_counter += cycles;
-    while (sample_counter >= 95) {
-        sample_counter -= 95;
+    while (sample_counter >= cycles_per_sample) {
+        sample_counter -= cycles_per_sample;
 
         int16_t sample = 0;
         if (channel1_playing) {
@@ -3182,8 +3148,6 @@ void chan2debug(uint8_t nr24) {
 }
 
 void check_joyp() {
-
-
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_QUIT) {
             SDL_Quit();
@@ -3191,58 +3155,27 @@ void check_joyp() {
         } else if (event.type == SDL_KEYDOWN) {
             SDL_Keycode k = event.key.keysym.sym;
             switch (k) {
-                case SDLK_UP:    
-                    up = true;
-                    break;
-                case SDLK_DOWN: 
-                    down = true;
-                    break;
-                case SDLK_LEFT:  
-                    left = true;
-                    break;
-                case SDLK_RIGHT: 
-                    right = true;
-                    break;
-                case SDLK_s:
-                    start = true;
-                    break;
-                case SDLK_d:
-                    sel = true;
-                    break;
-                case SDLK_a:
-                    a = true;
-                    break;
-                case SDLK_b:
-                    b = true;
-                    break;
+                case SDLK_UP:    up = true; break;
+                case SDLK_DOWN:  down = true; break;
+                case SDLK_LEFT:  left = true; break;
+                case SDLK_RIGHT: right = true; break;
+                case SDLK_s:     start = true; break;
+                case SDLK_d:     sel = true; break;
+                case SDLK_a:     a = true; break;
+                case SDLK_b:     b = true; break;
             }
+            *IF |= 0x10;  // Request joypad interrupt
         } else if (event.type == SDL_KEYUP) {
             SDL_Keycode k = event.key.keysym.sym;
             switch (k) {
-                case SDLK_UP:    
-                    up = false;
-                    break;
-                case SDLK_DOWN: 
-                    down = false;
-                    break;
-                case SDLK_LEFT:  
-                    left = false;
-                    break;
-                case SDLK_RIGHT: 
-                    right = false;
-                    break;
-                case SDLK_s:
-                    start = false;
-                    break;
-                case SDLK_d:
-                    sel = false;
-                    break;
-                case SDLK_a:
-                    a = false;
-                    break;
-                case SDLK_b:
-                    b = false;
-                    break;
+                case SDLK_UP:    up = false; break;
+                case SDLK_DOWN:  down = false; break;
+                case SDLK_LEFT:  left = false; break;
+                case SDLK_RIGHT: right = false; break;
+                case SDLK_s:     start = false; break;
+                case SDLK_d:     sel = false;   break;
+                case SDLK_a:     a = false;  break;
+                case SDLK_b:     b = false;  break;
             }
         }
     }
