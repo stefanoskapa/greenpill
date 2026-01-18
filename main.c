@@ -38,6 +38,7 @@
 //void audio_step();
 //void play(float frequency, double duration);
 int cpu_step(void);
+void chan2debug(uint8_t nr24);
 void ppu_steps(int cycles);
 void apu_step(int cycles);
 void ppu_step();
@@ -210,13 +211,9 @@ bool channel2_playing = false;
 double frequency;
 double phase_increment;
 
+uint8_t channel2_volume = 0;
 float channel2_phase = 0;
 float channel2_phase_increment = 0;
-
-
-
-
-
 
 
 int main(int argc, char **argv) {
@@ -2591,32 +2588,43 @@ void mem_write8(uint16_t addr, uint8_t b) {
         return;
     }
 
-
     // Channel 2 square wave
-    if (addr == 0xFF19) {
-        uint16_t period = *NR23; 
-        uint16_t ph = b & 0b00000111;
-        ph = ph << 8;
-        period |= ph;
-        double frequency = (double)131072 / (2048 - period);
-
-        bool length_enable = (*NR24 & 0b01000000) != 0; 
-        if (length_enable) {
-            uint8_t sound_length = *NR21 & 0b00111111; 
-            double duration = (64 - sound_length) / 256.0f; // duration in seconds
-        } else {
-            printf("length bit not set\n");
-        }
-        if ((b & 0b10000000) == 0) {
-            puts("channel 2 OFF");
+    if (addr == 0xFF19) { // channel 2 period high & control register (NR24) 
+        chan2debug(b);
+        if ((*NR52 & 0b10000000) == 0) {
             channel2_playing = false;
-        } else {
-            puts("channel 2 ON");
+        } else 
+        
+            if ((*NR22 & 0xF8) == 0) { //DAC is turned off
+            /*
+            A channel can be deactivated in one of the following ways:
+            Turning off its DAC
+            Its length timer expiring
+            (CH1 only) Frequency sweep overflowing the frequency
+            */
+            channel2_playing = false;
+        } else if ((b & 0b10000000) != 0) {
+
+            uint8_t initial_volume = (*NR22 & 0b11110000) >> 4;
+            channel2_volume = initial_volume;
             channel2_playing = true;
             channel2_phase = 0;
-            channel2_phase_increment = frequency / 44100.0f;
-        }
+            uint16_t period = *NR23; 
 
+            uint16_t ph = b & 0b00000111;
+            ph = ph << 8;
+            period |= ph;
+            double frequency = (double)131072 / (2048 - period);
+            channel2_phase_increment = frequency / 44100.0f;
+        
+
+        bool length_enable = (b & 0b01000000) != 0;         
+        if (length_enable) {
+            puts("length bit is set");
+        } else {
+            puts("length bit is not set");
+        }
+        }
     }
 
     if (debug) printf("Writing to ");
@@ -3138,10 +3146,43 @@ void apu_step(int cycles) {
 
         int16_t sample = 0;
         if (channel2_playing) {
-            sample = (channel2_phase < 0.5f) ? 5000 : -5000;
+            sample = (channel2_phase < 0.5f) ? channel2_volume * 200 : channel2_volume * (-200);
             channel2_phase += channel2_phase_increment;
             if (channel2_phase >= 1.0f) channel2_phase -= 1.0f;
         }
         SDL_QueueAudio(audio_device, &sample, sizeof(sample));
     }
+}
+
+
+void chan2debug(uint8_t nr24) {
+    
+    puts("---Channel 2 debug---");
+    if ((*NR52 & 0b10000000) == 0) {
+        puts("APU is OFF");
+    } else {
+        puts("APU is ON");
+    }
+
+    if ((*NR22 & 0xF8) == 0) {
+        puts("Channel 2 DAC is OFF");
+    } else {
+        puts("Channel 2 DAC is ON");
+    }
+
+    if (nr24 &0b1000000) {
+        puts("Channel 2 ON");
+    }
+
+    //NR21
+    uint8_t initial_length = *NR21 & 0b00111111;
+    uint8_t wave_duty = (*NR21 & 0b11000000) >> 6;
+    printf("NR21 { wave_duty=%d, initial_length=%d\n",wave_duty, initial_length); 
+
+    //NR22
+    uint8_t initial_volume = (*NR22 & 0b11110000) >> 4;
+    uint8_t env_dir = (*NR22 & 0b00001000) >> 3;
+    uint8_t sweep_pace = (*NR22 & 0b00000111);
+    printf("NR22 {initial_volume=%d, envelope_direction=%d, sweep_pace=%d\n", initial_volume, env_dir, sweep_pace);
+
 }
