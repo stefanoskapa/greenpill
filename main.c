@@ -36,6 +36,7 @@
  * instead of ~16.67 (the error is 0.45%).
  */
 #define NANOS_PER_FRAME 16742706 
+#define CYCLES_PER_SAMPLE (4194304.0f / 44100.0f)
 
 #define SAMPLE_RATE 48000
 #define AMPLITUDE   28000
@@ -410,7 +411,6 @@ void ppu_step() {
 
             int tile_row = y / 8;
             int row_in_tile = y % 8; 
-            int x = 0;
 
             //160 pixels / 8 pixels per tile = 20 tiles.
             for (int i = 0; i < 20; i++) {
@@ -1286,8 +1286,8 @@ int cpu_step(void) {
                    return 8;
         case 0x76: // HALT    b1 c4 flags:----
                    if (debug) printf("HALT\n");
-                    halted = true;
-                    return 4;
+                   halted = true;
+                   return 4;
         case 0x77: // LD [HL], A    b1 c8 flags:----
                    if (debug) printf("LD [HL], A\n");
                    mem_write8(L | (H << 8), A); 
@@ -2508,48 +2508,46 @@ void mem_write8(uint16_t addr, uint8_t b) {
 
     // Channel 2 square wave
     if (addr == 0xFF19) { // channel 2 period high & control register (NR24) 
-        //chan2debug(b);
+                          //chan2debug(b);
         if ((*NR52 & 0b10000000) == 0) {
             channel2_playing = false;
         } else if ((*NR22 & 0xF8) == 0) { //DAC is turned off
-                channel2_playing = false;
+            channel2_playing = false;
         } else if ((b & 0b10000000) != 0) {
+            uint8_t initial_volume = (*NR22 & 0b11110000) >> 4;
+            channel2_volume = initial_volume;
+            channel2_playing = true;
+            channel2_phase = 0;
+            uint16_t period = *NR23; 
 
-                uint8_t initial_volume = (*NR22 & 0b11110000) >> 4;
-                channel2_volume = initial_volume;
-                channel2_playing = true;
-                channel2_phase = 0;
-                uint16_t period = *NR23; 
-
-                uint16_t ph = b & 0b00000111;
-                ph = ph << 8;
-                period |= ph;
-                double frequency = (double)131072 / (2048 - period);
-                channel2_phase_increment = frequency / 44100.0f;
-
-
-            }
+            uint16_t ph = b & 0b00000111;
+            ph = ph << 8;
+            period |= ph;
+            double frequency = (double)131072 / (2048 - period);
+            channel2_phase_increment = frequency / 44100.0f;
+        }
     }
 
     if (addr == 0xFF14) { // channel 1 period high & control register (NR24) 
         if ((*NR52 & 0b10000000) == 0) {
             channel1_playing = false;
         } else if ((*NR12 & 0xF8) == 0) { //DAC is turned off
-                channel1_playing = false;
+            channel1_playing = false;
         } else if ((b & 0b10000000) != 0) {
-                uint8_t initial_volume = (*NR12 & 0b11110000) >> 4;
-                channel1_volume = initial_volume;
-                channel1_playing = true;
-                channel1_phase = 0;
-                uint16_t period = *NR13; 
+            uint8_t initial_volume = (*NR12 & 0b11110000) >> 4;
+            channel1_volume = initial_volume;
+            channel1_playing = true;
+            channel1_phase = 0;
+            uint16_t period = *NR13; 
 
-                uint16_t ph = b & 0b00000111;
-                ph = ph << 8;
-                period |= ph;
-                double frequency = (double)131072 / (2048 - period);
-                channel1_phase_increment = frequency / 44100.0f;
-            }
+            uint16_t ph = b & 0b00000111;
+            ph = ph << 8;
+            period |= ph;
+            double frequency = (double)131072 / (2048 - period);
+            channel1_phase_increment = frequency / 44100.0f;
+        }
     }
+
     if (debug) printf("Writing to ");
     if (addr < 0x4000) {
         if (debug)   printf("ROM bank 0 (ignored)\n");
@@ -2906,14 +2904,13 @@ void show_cartridge_info() {
 
     uint8_t cgb_flag = mem[0x0143];
     char *cart_comp;
-    bool is_old_cart = true;
+
     if (cgb_flag == 0x80) {
         cart_comp = "CGB-compatible";
     } else if (cgb_flag == 0xC0) {
         cart_comp = "CGB-only";
     } else {
         cart_comp = "DMG";
-        is_old_cart = false;
     }
     bool is_old_licensee = mem[0x014B] != 0x33;
     bool logo_found = memcmp(logo, mem + 0x104, 48) == 0;
@@ -3063,12 +3060,11 @@ void handle_interrupts(void) {
 
 
 float sample_counter = 0;
-const float cycles_per_sample = 4194304.0f / 44100.0f;
 
 void apu_step(int cycles) {
     sample_counter += cycles;
-    while (sample_counter >= cycles_per_sample) {
-        sample_counter -= cycles_per_sample;
+    while (sample_counter >= CYCLES_PER_SAMPLE) {
+        sample_counter -= CYCLES_PER_SAMPLE;
 
         int16_t sample = 0;
         if (channel1_playing) {
