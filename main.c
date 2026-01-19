@@ -73,16 +73,7 @@ uint32_t palette[4] = {
     0xFF0E450B,  // Dark (color 2)
     0xFF1B2A09   // Darkest (color 3)
 };
-/*
-uint32_t palette[4] = {
 
-    0xFFE0F8D0,  // Lightest (color 0) - white/light green
-    0xFF88C070,  // Light (color 1)
-    0xFF346856,  // Dark (color 2)
-    0xFF081820   // Darkest (color 3) - black/dark green
-                 //
-};
-*/
 struct sprite {
     uint8_t y, x, tile, flags;
 };
@@ -171,8 +162,6 @@ uint8_t *NR13 = &mem[0xFF13];
  * - 7  : Trigger
  **/
 uint8_t *NR14 = &mem[0xFF14];
-
-
 
 /*
  * NR21 - Channel 2 length timer & duty cycle
@@ -313,13 +302,6 @@ int main(int argc, char **argv) {
 
     uint64_t frame_cycles = 0;
 
-
-    unsigned long long apu_cycles = 0;
-    long joyp_time = 0;
-    long cpu_time = 0;
-    long timer_time = 0;
-    long ppu_time = 0;
-    long apu_time = 0;
     clock_gettime(CLOCK_MONOTONIC, &frame_start);
     while (true) {
 
@@ -340,11 +322,6 @@ int main(int argc, char **argv) {
 
         frame_cycles += cycles;
         if (frame_cycles >= CYCLES_PER_FRAME) {
-            joyp_time = 0;
-            cpu_time = 0;
-            timer_time = 0;
-            ppu_time = 0;
-            apu_time = 0;
             frame_cycles -= CYCLES_PER_FRAME;
 
             while (SDL_GetQueuedAudioSize(audio_device) > 4000) {
