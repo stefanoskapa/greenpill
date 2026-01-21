@@ -325,10 +325,11 @@ int main(int argc, char **argv) {
         frame_cycles += cycles;
         if (frame_cycles >= CYCLES_PER_FRAME) {
             frame_cycles -= CYCLES_PER_FRAME;
-
+/*
             while (SDL_GetQueuedAudioSize(audio_device) > 4000) {
                 SDL_Delay(1);
             }
+            */
         }
     }
 
@@ -531,22 +532,15 @@ uint8_t *get_tile(int index) {
 }
 bool halted = false;
 int cpu_step(void) {
-    if (halted) {
-        // Check if any interrupt can wake us up
-        if (*IF & *IE & 0x1F) {
-            halted = false;
-        }
-        return 4;  // Still consume cycles while halted
+    if (ime_scheduled) {
+        IME = true;
+        ime_scheduled = false;
     }
     uint8_t n8 = 0;   // 8-bit integer signed or unsigned
     uint16_t n16 = 0; // 16-bit integer signed or unsigned
     int8_t e8 = 0;    // 8-bit signed offset!
     uint8_t a8 = 0;   // unsigned Offset added to 0xFF00
     uint16_t a16 = 0; // absolute offset, always unsigned
-    if (ime_scheduled) {
-        IME = true;
-        ime_scheduled = false;
-    }
     uint8_t op = mem[PC];
     switch (op) {
         case 0x00: // NOP    b1 c4 flags:----
@@ -1287,6 +1281,13 @@ int cpu_step(void) {
                    return 8;
         case 0x76: // HALT    b1 c4 flags:----
                    if (debug) printf("HALT\n");
+                    if (halted) {
+                        if (((*IF & *IE) != 0) || IME == true) {
+                            halted = false;
+                            PC += 1;
+                            return 4;
+                        }
+                    }
                    halted = true;
                    return 4;
         case 0x77: // LD [HL], A    b1 c8 flags:----
@@ -3181,6 +3182,7 @@ void check_joyp() {
                 case SDLK_b:     b = true; break;
             }
             *IF |= 0x10;  // Request joypad interrupt
+     //       *IE |= 0x10;
         } else if (event.type == SDL_KEYUP) {
             SDL_Keycode k = event.key.keysym.sym;
             switch (k) {
