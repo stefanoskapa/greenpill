@@ -221,6 +221,7 @@ uint8_t channel2_volume = 0;
 float channel2_phase = 0;
 float channel2_phase_increment = 0;
 
+float cycles_per_sample_counter = 0;
 
 int main(int argc, char **argv) {
     A = 0x01;
@@ -2985,6 +2986,48 @@ void timer_step(int cycles) {
     while (div_counter >= 256) {
         div_counter -= 256;
         mem[0xFF04]++;  // DIV register
+
+        //
+        if (mem[0xFF04] % 512 == 0) { // every 64 Hz
+           //envelope sweep  channel 1
+            uint8_t ch1pace = *NR12 & 0b00000111;
+            static int pace_counter1 = 0;
+            if (ch1pace != 0) { //channel 1 envelope active
+                if (pace_counter1 == ch1pace) {
+                    if ((*NR12 & 0b00001000) != 0 ) { //increasing
+                        channel1_volume++;
+                    } else {
+                        channel1_volume--;
+                    }
+                    pace_counter1 = 0;
+                } else {
+                    pace_counter1 ++;
+                }
+                
+            }
+           //envelope sweep  channel 2
+            uint8_t ch2pace = *NR22 & 0b00000111;
+            static int pace_counter2 = 0;
+            if (ch2pace != 0) { //channel 1 envelope active
+                if (pace_counter2 == ch2pace) {
+                    if ((*NR22 & 0b00001000) != 0 ) { //increasing
+                        channel2_volume++;
+                    } else {
+                        channel2_volume--;
+                    }
+                    pace_counter2 = 0;
+                } else {
+                    pace_counter2 ++;
+                }
+                
+            }
+        } 
+        if (mem[0xFF04] % 64 == 0) { // every 256 Hz
+            // sound length
+        } 
+        if (mem[0xFF04] % 128 == 0) { // every 128 Hz
+            // Ch1 freq sweep
+        }
     }
 
     uint8_t TAC = mem[0xFF07];
@@ -3059,25 +3102,25 @@ void handle_interrupts(void) {
 
 
 
-float sample_counter = 0;
 
 void apu_step(int cycles) {
-    sample_counter += cycles;
-    while (sample_counter >= CYCLES_PER_SAMPLE) {
-        sample_counter -= CYCLES_PER_SAMPLE;
-
+    cycles_per_sample_counter += cycles;
+    if (cycles_per_sample_counter >= CYCLES_PER_SAMPLE) {
+        cycles_per_sample_counter -= CYCLES_PER_SAMPLE;
+        int16_t vol_steps = 1000;
         int16_t sample = 0;
         if (channel1_playing) {
-            sample += (channel1_phase < 0.5f) ? channel1_volume * 200 : channel1_volume * (-200);
+            sample += (channel1_phase < 0.5f) ? channel1_volume * vol_steps : channel1_volume * (-vol_steps);
             channel1_phase += channel1_phase_increment;
             if (channel1_phase >= 1.0f) channel1_phase -= 1.0f;
         }
 
         if (channel2_playing) {
-            sample += (channel2_phase < 0.5f) ? channel2_volume * 200 : channel2_volume * (-200);
+            sample += (channel2_phase < 0.5f) ? channel2_volume * vol_steps : channel2_volume * (-vol_steps);
             channel2_phase += channel2_phase_increment;
             if (channel2_phase >= 1.0f) channel2_phase -= 1.0f;
         }
+
         SDL_QueueAudio(audio_device, &sample, sizeof(sample));
     }
 }
