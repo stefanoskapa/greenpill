@@ -59,6 +59,7 @@ void show_frame();
 void send_word_to_buffer(uint8_t byte1, uint8_t byte2, int x, bool is_obj);
 void print_bin8(uint8_t v);
 void check_joyp();
+void toggle_fullscreen(SDL_Window* window);
 
 SDL_Event event;
 bool debug = false;
@@ -288,6 +289,7 @@ int main(int argc, char **argv) {
                 ); 
     }
 
+
     SDL_Init(SDL_INIT_AUDIO);
 
     // the representation of our audio device in SDL:
@@ -307,6 +309,7 @@ int main(int argc, char **argv) {
     clock_gettime(CLOCK_MONOTONIC, &frame_start);
     while (true) {
 
+        
         check_joyp();
 
         cycles = cpu_step();
@@ -325,11 +328,10 @@ int main(int argc, char **argv) {
         frame_cycles += cycles;
         if (frame_cycles >= CYCLES_PER_FRAME) {
             frame_cycles -= CYCLES_PER_FRAME;
-/*
+
             while (SDL_GetQueuedAudioSize(audio_device) > 4000) {
                 SDL_Delay(1);
             }
-            */
         }
     }
 
@@ -3180,6 +3182,9 @@ void check_joyp() {
                 case SDLK_d:     sel = true; break;
                 case SDLK_a:     a = true; break;
                 case SDLK_b:     b = true; break;
+                case SDLK_F11:  
+                    toggle_fullscreen(window);
+                    return;
             }
             *IF |= 0x10;  // Request joypad interrupt
      //       *IE |= 0x10;
@@ -3196,5 +3201,20 @@ void check_joyp() {
                 case SDLK_b:     b = false;  break;
             }
         }
+    }
+}
+
+void toggle_fullscreen(SDL_Window* window) {
+    bool isFullscreen = SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN;
+    /*
+    SDL_DisplayMode dm;
+    SDL_GetCurrentDisplayMode(0, &dm);
+    int width = dm.w;
+    int height = dm.h;
+    */
+    if (isFullscreen) {
+        SDL_SetWindowFullscreen(window, 0);
+    } else {
+        SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN);
     }
 }
