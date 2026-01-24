@@ -57,7 +57,7 @@ void timer_step(int cycles);
 void handle_interrupts(void);
 uint8_t *get_tile(int index);
 void show_frame();
-void send_word_to_buffer(uint8_t byte1, uint8_t byte2, int x, bool is_obj, bool is_opaque);
+void send_word_to_buffer(uint8_t byte1, uint8_t byte2, int x, bool is_obj, uint8_t flags);
 void print_bin8(uint8_t v);
 void check_joyp();
 void toggle_fullscreen(SDL_Window* window);
@@ -95,11 +95,6 @@ uint8_t mem[2000000];
  * - When an interrupt handler is executed.
  *
  * IME is unset when the game start running.
- *
- *
- *
- *
- *
  */
 bool IME = false;
 bool ime_scheduled = false; 
@@ -142,7 +137,6 @@ uint8_t *LY = &mem[0xFF44];
 uint8_t *STAT = &mem[0xFF41];
 uint8_t *SCY = &mem[0xFF42];
 uint8_t *SCX = &mem[0xFF43];
-
 
 // APU registers
 
@@ -365,7 +359,7 @@ int main(int argc, char **argv) {
             while (SDL_GetQueuedAudioSize(audio_device) > 4000 ) {
                 SDL_Delay(1);
             }
-        
+
         }
     }
 
@@ -373,9 +367,9 @@ int main(int argc, char **argv) {
 }
 
 uint64_t timer_diff(struct timespec *start, struct timespec *end) {
-        uint64_t difference = (uint64_t)(end->tv_sec - start->tv_sec) * 1000000000ULL;
-        difference += (uint64_t)(end->tv_nsec - start->tv_nsec);
-        return difference;
+    uint64_t difference = (uint64_t)(end->tv_sec - start->tv_sec) * 1000000000ULL;
+    difference += (uint64_t)(end->tv_nsec - start->tv_nsec);
+    return difference;
 }
 /*
    Game Boy resolution: 160x144
@@ -471,7 +465,7 @@ void ppu_step() {
 
                 uint8_t bgbyte1 = mem[tile_addr + row_in_tile * 2];
                 uint8_t bgbyte2 = mem[tile_addr + row_in_tile * 2 + 1];
-                send_word_to_buffer(bgbyte1, bgbyte2, i * 8, false, true);               
+                send_word_to_buffer(bgbyte1, bgbyte2, i * 8, false, 0);               
             }
 
             //mix background, window and objects
@@ -501,7 +495,7 @@ void ppu_step() {
                 if (height == 8) { 
                     uint8_t byte1 = mem[0x8000 + object.tile * 16 + row_in_sprite * 2];
                     uint8_t byte2 = mem[0x8000 + object.tile * 16 + row_in_sprite * 2 + 1];
-                    send_word_to_buffer(byte1, byte2, object.x - 8, true, (object.flags & 0b10000000) == 0);               
+                    send_word_to_buffer(byte1, byte2, object.x - 8, true, object.flags);               
                 } else {
                     printf("Tall sprites detected!\n");
                     exit(1);
@@ -538,19 +532,22 @@ void ppu_step() {
     }
 }
 
-void send_word_to_buffer(uint8_t byte1, uint8_t byte2, int x, bool is_obj, bool is_opaque) {
+void send_word_to_buffer(uint8_t byte1, uint8_t byte2, int x, bool is_obj, uint8_t flags) {
+
+    bool priority = flags & 0b10000000;
+    bool y_flip = ((flags & 0b01000000) != 0) && is_obj;
+    bool x_flip = ((flags & 0b00100000) != 0) && is_obj;
 
     for (int j = 0; j < 8; j++) { // 8 pixels from left to right
 
-        int screen_x = x + j;
+        int screen_x = x + (x_flip ? (7-j) : j);
         if (screen_x < 0 || screen_x >= 160) continue;
         uint8_t b_mask = 1 << (7 - j); // 00000001 -> 10000000 (7 shifts) 
         uint8_t lo = (byte1 & b_mask) >> (7 - j);
         uint8_t hi = (byte2 & b_mask) >> (7 - j);
-
         uint8_t color_code = lo | (hi << 1);
         if (is_obj == true && color_code == 0) continue;
-        if (is_obj == true && is_opaque == false) {
+        if (is_obj == true && priority == false) { // any bg color except 0 overwrites the object
             if (framebuffer[*LY * 160 + screen_x] != palette[0]){
                 continue;
             }
@@ -1327,13 +1324,13 @@ int cpu_step(void) {
                    return 8;
         case 0x76: // HALT    b1 c4 flags:----
                    if (debug) printf("HALT\n");
-                    if (halted) {
-                        if (((*IF & *IE) != 0) || IME == true) {
-                            halted = false;
-                            PC += 1;
-                            return 4;
-                        }
-                    }
+                   if (halted) {
+                       if (((*IF & *IE) != 0) || IME == true) {
+                           halted = false;
+                           PC += 1;
+                           return 4;
+                       }
+                   }
                    halted = true;
                    return 4;
         case 0x77: // LD [HL], A    b1 c8 flags:----
@@ -3036,7 +3033,7 @@ void timer_step(int cycles) {
 
         //
         if (mem[0xFF04] % 512 == 0) { // every 64 Hz
-           //envelope sweep  channel 1
+                                      //envelope sweep  channel 1
             uint8_t ch1pace = *NR12 & 0b00000111;
             static int pace_counter1 = 0;
             if (ch1pace != 0) { //channel 1 envelope active
@@ -3050,9 +3047,9 @@ void timer_step(int cycles) {
                 } else {
                     pace_counter1 ++;
                 }
-                
+
             }
-           //envelope sweep  channel 2
+            //envelope sweep  channel 2
             uint8_t ch2pace = *NR22 & 0b00000111;
             static int pace_counter2 = 0;
             if (ch2pace != 0) { //channel 1 envelope active
@@ -3066,14 +3063,14 @@ void timer_step(int cycles) {
                 } else {
                     pace_counter2 ++;
                 }
-                
+
             }
         } 
         if (mem[0xFF04] % 64 == 0) { // every 256 Hz
-            // sound length
+                                     // sound length
         } 
         if (mem[0xFF04] % 128 == 0) { // every 128 Hz
-            // Ch1 freq sweep
+                                      // Ch1 freq sweep
         }
     }
 
@@ -3220,8 +3217,8 @@ void check_joyp() {
                 case SDLK_a:     a = true; break;
                 case SDLK_b:     b = true; break;
                 case SDLK_F11:  
-                toggle_fullscreen(window);
-                return;
+                                 toggle_fullscreen(window);
+                                 return;
             }
             *IF |= 0b00010000;  // Request joypad interrupt
         } else if (event.type == SDL_KEYUP) {
@@ -3243,11 +3240,11 @@ void check_joyp() {
 void toggle_fullscreen(SDL_Window* window) {
     bool isFullscreen = SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN;
     /*
-    SDL_DisplayMode dm;
-    SDL_GetCurrentDisplayMode(0, &dm);
-    int width = dm.w;
-    int height = dm.h;
-    */
+       SDL_DisplayMode dm;
+       SDL_GetCurrentDisplayMode(0, &dm);
+       int width = dm.w;
+       int height = dm.h;
+       */
     if (isFullscreen) {
         SDL_SetWindowFullscreen(window, 0);
     } else {
