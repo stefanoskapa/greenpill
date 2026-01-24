@@ -57,7 +57,7 @@ void timer_step(int cycles);
 void handle_interrupts(void);
 uint8_t *get_tile(int index);
 void show_frame();
-void send_word_to_buffer(uint8_t byte1, uint8_t byte2, int x, bool is_obj);
+void send_word_to_buffer(uint8_t byte1, uint8_t byte2, int x, bool is_obj, bool is_opaque);
 void print_bin8(uint8_t v);
 void check_joyp();
 void toggle_fullscreen(SDL_Window* window);
@@ -82,11 +82,47 @@ struct sprite {
 };
 uint8_t mem[2000000];
 
-// Flags
-bool IME = false;           // Interrupt Master Enable flag (write only) IME is unset (interrupts are disabled) when the game starts running.
+/*
+ * Interrupt Master Enable flag
+ * 
+ * IME is a flag internal to the CPU that controls
+ * whether any interrupt handlers are called,
+ * regardless of the contents of IE. IME is only
+ * modified by:
+ * - ei instruction
+ * - di instruction
+ * - reti instruction (same as ei followed by ret)
+ * - When an interrupt handler is executed.
+ *
+ * IME is unset when the game start running.
+ *
+ *
+ *
+ *
+ *
+ */
+bool IME = false;
 bool ime_scheduled = false; 
-uint8_t *IE = &mem[0xFFFF]; //interrupt enable flag
-uint8_t *IF = &mem[0xFF0F]; //interrupt flag
+/*
+ * Interrupt Enable
+ * - bit0: VBlank
+ * - bit1: LCD
+ * - bit2: Timer
+ * - bit3: Serial
+ * - bit4: Joypad
+ * - bits 5-7: unused
+ */
+uint8_t *IE = &mem[0xFFFF];
+/*
+ * Interrupt Flag
+ * - bit0: VBlank
+ * - bit1: LCD
+ * - bit2: Timer
+ * - bit3: Serial
+ * - bit4: Joypad
+ * - bits 5-7: unused
+ */
+uint8_t *IF = &mem[0xFF0F];
 
 // CPU registers
 uint8_t A = 0;  // A
@@ -235,7 +271,6 @@ int main(int argc, char **argv) {
     H = 0x01;
 
     L = 0x4D;
-    //PC = 0x0000;
     PC = 0x0100;
     SP = 0x0000;
     mem[0xFF40] = 0x91;  // LCDC - LCD ON!
@@ -364,7 +399,7 @@ void ppu_step() {
     static struct sprite intersecting_sprites[10];
     static int inter_sprite_len = 0;
 
-    int height = (*LCDC & 0x04) ? 16 : 8;
+    int height = (*LCDC & 0b00000100) ? 16 : 8; //LCDC bit 2 = 0 -> 8x8
 
     if (dots > 0 && dots <= 80) {
         // mode 2 - OAM scan
@@ -436,7 +471,7 @@ void ppu_step() {
 
                 uint8_t bgbyte1 = mem[tile_addr + row_in_tile * 2];
                 uint8_t bgbyte2 = mem[tile_addr + row_in_tile * 2 + 1];
-                send_word_to_buffer(bgbyte1, bgbyte2, i * 8, false);               
+                send_word_to_buffer(bgbyte1, bgbyte2, i * 8, false, true);               
             }
 
             //mix background, window and objects
@@ -466,7 +501,7 @@ void ppu_step() {
                 if (height == 8) { 
                     uint8_t byte1 = mem[0x8000 + object.tile * 16 + row_in_sprite * 2];
                     uint8_t byte2 = mem[0x8000 + object.tile * 16 + row_in_sprite * 2 + 1];
-                    send_word_to_buffer(byte1, byte2, object.x - 8, true);               
+                    send_word_to_buffer(byte1, byte2, object.x - 8, true, (object.flags & 0b10000000) == 0);               
                 } else {
                     printf("Tall sprites detected!\n");
                     exit(1);
@@ -495,7 +530,7 @@ void ppu_step() {
                           // duration: 4560 dots (10 scanlines)
                           // description: Waiting until the next frame
             *STAT = (*STAT & 0b11111100) | 0b01;  // Mode 1
-            *IF |= 0x01;  // Request VBlank interrupt!
+            *IF |= 0b00000001;  // Request VBlank interrupt!
             show_frame();
         } else if (*LY > 153) {
             *LY = 0;
@@ -503,7 +538,7 @@ void ppu_step() {
     }
 }
 
-void send_word_to_buffer(uint8_t byte1, uint8_t byte2, int x, bool is_obj) {
+void send_word_to_buffer(uint8_t byte1, uint8_t byte2, int x, bool is_obj, bool is_opaque) {
 
     for (int j = 0; j < 8; j++) { // 8 pixels from left to right
 
@@ -515,6 +550,11 @@ void send_word_to_buffer(uint8_t byte1, uint8_t byte2, int x, bool is_obj) {
 
         uint8_t color_code = lo | (hi << 1);
         if (is_obj == true && color_code == 0) continue;
+        if (is_obj == true && is_opaque == false) {
+            if (framebuffer[*LY * 160 + screen_x] != palette[0]){
+                continue;
+            }
+        }
         framebuffer[*LY * 160 + screen_x] = palette[color_code];
     }
 }
@@ -2226,7 +2266,7 @@ int cpu_step(void) {
                    PC += 1;
                    return 8;
         case 0xD9: // RETI    b1 c16 flags:----
-                   if (debug) printf("RET \n");
+                   if (debug) printf("RETI \n");
                    {
                        uint8_t low = mem[SP];
                        uint8_t high = mem[SP + 1];
@@ -3062,42 +3102,35 @@ void timer_step(int cycles) {
 }
 
 void handle_interrupts(void) {
-
-    if ((*IE & *IF & 0b00000001) == 0b00000001) {
-
-        // VBlank
+    if ((*IE & *IF & 0b00000001) == 0b00000001) { // VBlank
         IME = false;
         *IF = (*IF & 0b11111110);
         SP -= 2;
         mem_write16(SP, PC);
         PC = 0x40;
         if (debug) printf("<VBlank Interrupt>\n");
-    } else if ((*IE & *IF & 0b00000010) == 0b00000010) {
-        // LCD
+    } else if ((*IE & *IF & 0b00000010) == 0b00000010) { // LCD
         IME = false;
         *IF = (*IF & 0b11111101);
         SP -= 2;
         mem_write16(SP, PC);
         PC = 0x48;
         if (debug) printf("<STAT Interrupt>\n");
-    } else if ((*IE & *IF & 0b00000100) == 0b00000100) {
-        // Timer
+    } else if ((*IE & *IF & 0b00000100) == 0b00000100) { // Timer
         IME = false;
         *IF =  (*IF & 0b11111011);
         SP -= 2;
         mem_write16(SP, PC);
         PC = 0x50;
         if (debug) printf("<Timer Interrupt>\n");
-    } else if ((*IE & *IF & 0b00001000) == 0b00001000) {
-        // serial
+    } else if ((*IE & *IF & 0b00001000) == 0b00001000) { // serial
         IME = false;
         *IF = (*IF & 0b11110111);
         SP -= 2;
         mem_write16(SP, PC);
         PC = 0x58;
         if (debug) printf("<Serial Interrupt>\n");
-    } else if ((*IE & *IF & 0b00010000) == 0b00010000) {
-        //Joypad
+    } else if ((*IE & *IF & 0b00010000) == 0b00010000) { // Joypad
         IME = false;
         *IF = (*IF & 0b11101111);
         SP -= 2;
@@ -3190,8 +3223,7 @@ void check_joyp() {
                 toggle_fullscreen(window);
                 return;
             }
-            *IF |= 0x10;  // Request joypad interrupt
-     //       *IE |= 0x10;
+            *IF |= 0b00010000;  // Request joypad interrupt
         } else if (event.type == SDL_KEYUP) {
             SDL_Keycode k = event.key.keysym.sym;
             switch (k) {
