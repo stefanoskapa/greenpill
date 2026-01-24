@@ -41,6 +41,7 @@
 #define SAMPLE_RATE 48000
 #define AMPLITUDE   28000
 
+uint64_t timer_diff(struct timespec *start, struct timespec *end);
 int cpu_step(void);
 void chan2debug(uint8_t nr24);
 void ppu_steps(int cycles);
@@ -306,21 +307,17 @@ int main(int argc, char **argv) {
 
     uint64_t frame_cycles = 0;
 
-    clock_gettime(CLOCK_MONOTONIC, &frame_start);
     while (true) {
-
-        
-        check_joyp();
 
         cycles = cpu_step();
         if (debug) show_registers();
+
 
         timer_step(cycles);
 
         if (IME == true) {
             handle_interrupts();
         }
-
         ppu_steps(cycles);
 
         apu_step(cycles);
@@ -329,15 +326,22 @@ int main(int argc, char **argv) {
         if (frame_cycles >= CYCLES_PER_FRAME) {
             frame_cycles -= CYCLES_PER_FRAME;
 
-            while (SDL_GetQueuedAudioSize(audio_device) > 4000) {
+            check_joyp();
+            while (SDL_GetQueuedAudioSize(audio_device) > 4000 ) {
                 SDL_Delay(1);
             }
+        
         }
     }
 
     return EXIT_SUCCESS;
 }
 
+uint64_t timer_diff(struct timespec *start, struct timespec *end) {
+        uint64_t difference = (uint64_t)(end->tv_sec - start->tv_sec) * 1000000000ULL;
+        difference += (uint64_t)(end->tv_nsec - start->tv_nsec);
+        return difference;
+}
 /*
    Game Boy resolution: 160x144
    A "dot" = 222 Hz (≅ 4.194 MHz) time unit. 4 dots / M-cycle
@@ -357,7 +361,7 @@ void ppu_steps(int cycles) {
 void ppu_step() {
     dots++; 
 
-    static struct sprite intersecting_sprites[40];
+    static struct sprite intersecting_sprites[10];
     static int inter_sprite_len = 0;
 
     int height = (*LCDC & 0x04) ? 16 : 8;
@@ -3167,7 +3171,7 @@ void chan2debug(uint8_t nr24) {
 }
 
 void check_joyp() {
-    while (SDL_PollEvent(&event)) {
+    if (SDL_PollEvent(&event)) {
         if (event.type == SDL_QUIT) {
             SDL_Quit();
             exit(1);
@@ -3183,8 +3187,8 @@ void check_joyp() {
                 case SDLK_a:     a = true; break;
                 case SDLK_b:     b = true; break;
                 case SDLK_F11:  
-                    toggle_fullscreen(window);
-                    return;
+                toggle_fullscreen(window);
+                return;
             }
             *IF |= 0x10;  // Request joypad interrupt
      //       *IE |= 0x10;
