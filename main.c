@@ -240,14 +240,14 @@ uint8_t *NR24 = &mem[0xFF19];
 
 //FF00 — P1/JOYP: Joypad
 uint8_t *JOYP = &mem[0xFF00];
-bool right = false;
-bool up = false;
-bool down = false;
-bool left = false;
-bool sel = false;
-bool a = false;
-bool b = false;
-bool start = false;
+bool b_right = false;
+bool b_up = false;
+bool b_down = false;
+bool b_left = false;
+bool b_sel = false;
+bool b_a = false;
+bool b_b = false;
+bool b_start = false;
 
 struct timespec frame_start, frame_end;
 
@@ -2543,10 +2543,26 @@ void print_bin8(uint8_t v) {
 }
 
 uint8_t mem_read8(uint16_t addr) {
-
+    /*
+    if (addr == 0xFF01) { // attempting to read serial, return unplugged
+        puts("Attempting to read SB (0xFF01");
+        return 0xFF;
+    }
+    if (addr == 0xFF02) {
+        puts("Attempting to read SC (0xFF02");
+    }
+    */
     return mem[addr];
 }
 void mem_write8(uint16_t addr, uint8_t b) {
+    if (addr == 0xFF02) { //SC
+        if((b & 0b10000001) == 0b10000001) {
+            *SB = 0b11111111; //unplugged
+            *SC &= 0b01111111; // transfer done
+            *IF |= 0b00001000; //request serial interrupt
+            return;
+        }
+    }
     if (addr == 0xFF46) {
         uint16_t src = b << 8;
         for (int i = 0; i < 160; i++) {
@@ -2559,15 +2575,15 @@ void mem_write8(uint16_t addr, uint8_t b) {
         if ((*JOYP & 0b00110000) == 0b00110000) {
             *JOYP |= 0b00001111;
         } else if ((*JOYP & 0b00010000) == 0){ //d-pad
-            if (right) *JOYP &= 0b11111110; else *JOYP |= 0b00000001; 
-            if (left) *JOYP &= 0b11111101; else *JOYP |= 0b00000010; 
-            if (up) *JOYP &= 0b11111011; else *JOYP |= 0b00000100; 
-            if (down) *JOYP &= 0b11110111; else *JOYP |= 0b00001000; 
+            if (b_right) *JOYP &= 0b11111110; else *JOYP |= 0b00000001; 
+            if (b_left) *JOYP &= 0b11111101; else *JOYP |= 0b00000010; 
+            if (b_up) *JOYP &= 0b11111011; else *JOYP |= 0b00000100; 
+            if (b_down) *JOYP &= 0b11110111; else *JOYP |= 0b00001000; 
         } else if ((*JOYP & 0b00100000) == 0) { 
-            if (a) *JOYP &= 0b11111110; else *JOYP |= 0b00000001; 
-            if (b) *JOYP &= 0b11111101; else *JOYP |= 0b00000010; 
-            if (sel) *JOYP &= 0b11111011; else *JOYP |= 0b00000100; 
-            if (start) *JOYP &= 0b11110111; else *JOYP |= 0b00001000; 
+            if (b_a) *JOYP &= 0b11111110; else *JOYP |= 0b00000001; 
+            if (b_b) *JOYP &= 0b11111101; else *JOYP |= 0b00000010; 
+            if (b_sel) *JOYP &= 0b11111011; else *JOYP |= 0b00000100; 
+            if (b_start) *JOYP &= 0b11110111; else *JOYP |= 0b00001000; 
         }
         return;
     }
@@ -3229,14 +3245,14 @@ void check_joyp() {
         } else if (event.type == SDL_KEYDOWN) {
             SDL_Keycode k = event.key.keysym.sym;
             switch (k) {
-                case SDLK_UP:    up = true; break;
-                case SDLK_DOWN:  down = true; break;
-                case SDLK_LEFT:  left = true; break;
-                case SDLK_RIGHT: right = true; break;
-                case SDLK_s:     start = true; break;
-                case SDLK_d:     sel = true; break;
-                case SDLK_a:     a = true; break;
-                case SDLK_b:     b = true; break;
+                case SDLK_UP:    b_up = true; break;
+                case SDLK_DOWN:  b_down = true; break;
+                case SDLK_LEFT:  b_left = true; break;
+                case SDLK_RIGHT: b_right = true; break;
+                case SDLK_s:     b_start = true; break;
+                case SDLK_d:     b_sel = true; break;
+                case SDLK_a:     b_a = true; break;
+                case SDLK_b:     b_b = true; break;
                 case SDLK_F11:  
                                  toggle_fullscreen(window);
                                  return;
@@ -3245,14 +3261,14 @@ void check_joyp() {
         } else if (event.type == SDL_KEYUP) {
             SDL_Keycode k = event.key.keysym.sym;
             switch (k) {
-                case SDLK_UP:    up = false; break;
-                case SDLK_DOWN:  down = false; break;
-                case SDLK_LEFT:  left = false; break;
-                case SDLK_RIGHT: right = false; break;
-                case SDLK_s:     start = false; break;
-                case SDLK_d:     sel = false;   break;
-                case SDLK_a:     a = false;  break;
-                case SDLK_b:     b = false;  break;
+                case SDLK_UP:    b_up = false; break;
+                case SDLK_DOWN:  b_down = false; break;
+                case SDLK_LEFT:  b_left = false; break;
+                case SDLK_RIGHT: b_right = false; break;
+                case SDLK_s:     b_start = false; break;
+                case SDLK_d:     b_sel = false;   break;
+                case SDLK_a:     b_a = false;  break;
+                case SDLK_b:     b_b = false;  break;
             }
         }
     }
