@@ -3,13 +3,6 @@
 #include <stdbool.h>
 #include <stdio.h>
 
-#define CYCLES_PER_FRAME 70224  // 154 scanlines × 456 cycles
-/*
- * A frame is not exactly one 60th of a second: the Game Boy 
- * runs slightly slower than 60 Hz, as one frame takes ~16.74 ms 
- * instead of ~16.67 (the error is 0.45%).
- */
-#define NANOS_PER_FRAME 16742706 
 #define CYCLES_PER_SAMPLE (4194304.0f / 44100.0f)
 
 #define SAMPLE_RATE 48000
@@ -18,10 +11,9 @@
 extern uint8_t mem[];
 
 extern bool apu_debug;
-// FF25 — NR51: 
 
 /*
- * Sound Panning
+ * NR51 (0xFF25) Sound Panning
  * - bit0: CH1 right
  * - bit1: CH2 right
  * - bit2: CH3 right
@@ -34,7 +26,7 @@ extern bool apu_debug;
 uint8_t *NR51 = &mem[0xFF25];
 
 /*
- * Audio master control
+ * NR52 (0xFF26) Audio master control
  * - bit0: Ch1 on? (read only)
  * - bit1: Ch2 on? (read only)
  * - bit2: Ch3 on? (read only)
@@ -235,69 +227,77 @@ void audio_delay(void){
 
 void apu_memw_callback(uint16_t addr, uint8_t b) {
 
-    // Channel 2 square wave
-    if (addr == 0xFF17) { // NR22
-        if ((*NR22 & 0xF8) == 0) { // DAC is turned off
-           channel2_playing = false;
-           if (apu_debug) puts("channel 2 DAC is turned off");
-        }
-    }
-    if (addr == 0xFF12) { // NR12
-        if ((*NR12 & 0xF8) == 0) { // DAC is turned off
-           channel1_playing = false;
-           if (apu_debug) puts("channel 1 DAC is turned off");
-        }
-    }
-    if (addr == 0xFF19) { // channel 2 period high & control register (NR24) 
-        if (apu_debug) chan2debug(b);
-        if ((*NR52 & 0b10000000) == 0) { // Audio off
-            channel2_playing = false;
-        } else if ((*NR22 & 0xF8) == 0) { // DAC is turned off
-            channel2_playing = false;
-        } else if ((b & 0b10000000) != 0) {
-            uint8_t initial_volume = (*NR22 & 0b11110000) >> 4;
-            channel2_volume = initial_volume;
-            channel2_playing = true;
-            channel2_phase = 0;
-            uint16_t period = *NR23; 
 
-            if ((*NR24 & 0b01000000) != 0) { //length enabled
-                if (channel2_length == 0b00111111) {
-                    channel2_length = *NR21 & 0b00111111; // initial length
-                }
+    switch (addr) {
+        case 0xFF26: //NR52
+            if ((b & 0b10000000) == 0) {
+                channel1_playing = false;
+                channel2_playing = false;
+                if (apu_debug) puts("AUDIO OFF");
+            } else {
+                if (apu_debug) puts("AUDIO ON");
             }
-            uint16_t ph = b & 0b00000111;
-            ph = ph << 8;
-            period |= ph;
-            double frequency = (double)131072 / (2048 - period);
-            channel2_phase_increment = frequency / 44100.0f;
-        }
-    }
-
-    if (addr == 0xFF14) { // channel 1 period high & control register (NR24) 
-        if (apu_debug) chan1debug(b);
-        if ((*NR52 & 0b10000000) == 0) { // Audio off
-            channel1_playing = false;
-        } else if ((*NR12 & 0xF8) == 0) { //DAC is turned off
-            channel1_playing = false;
-        } else if ((b & 0b10000000) != 0) {
-            uint8_t initial_volume = (*NR12 & 0b11110000) >> 4;
-            channel1_volume = initial_volume;
-            channel1_playing = true;
-            channel1_phase = 0;
-            uint16_t period = *NR13; 
-            if ((*NR14 & 0b01000000) != 0) { //length enabled
-                if (channel1_length == 0b00111111) {
-                    channel1_length = *NR11 & 0b00111111; // initial length
-                }
+            break;
+        case 0xFF12: //NR12
+            if ((b & 0b11111000) == 0) { // DAC is turned off
+               channel1_playing = false;
+               if (apu_debug) puts("Ch1: DAC turned OFF");
+            } else {
+                uint8_t init_vol = (b & 0b11110000) >> 4;
+                uint8_t sw_pace = b & 0b00000111;
+                char *env_dir = (b & 0b00001000) == 0 ? "down" : "up";
+                if (apu_debug) printf("Ch1: init_vol=%u, env_dir=%s, sw_pace=%u }\n", init_vol, env_dir, sw_pace);
+                channel1_volume = init_vol;
+                //TODO sweep pace, envelope direction
             }
-
-            uint16_t ph = b & 0b00000111;
-            ph = ph << 8;
-            period |= ph;
-            double frequency = (double)131072 / (2048 - period);
-            channel1_phase_increment = frequency / 44100.0f;
-        }
+            break;
+        case 0xFF14: // NR14
+             if ((b & 0b10000000) != 0) {
+                channel1_volume = (*NR12 & 0b11110000) >> 4;
+                channel1_playing = true;
+                uint16_t period = *NR13; 
+                uint16_t period_high = b & 0b00000111;
+                period_high = period_high << 8;
+                period |= period_high;
+                double frequency = (double)131072 / (2048 - period);
+                channel1_phase_increment = frequency / 44100.0f;
+                if (apu_debug) {
+                    puts("Ch1: triggered");
+                    printf("Ch1: initial volume = %u\n", channel1_volume);
+                    printf("Ch1: period = %u (%f Hz)\n", period, frequency);
+                }
+             }
+             break;
+        case 0xFF17: // NR22
+            if ((b & 0xF8) == 0) { 
+               channel2_playing = false;
+               if (apu_debug) puts("Ch2: DAC turned OFF");
+            } else {
+                uint8_t init_vol = (b & 0b11110000) >> 4;
+                uint8_t sw_pace = b & 0b00000111;
+                char *env_dir = (b & 0b00001000) == 0 ? "down" : "up";
+                if (apu_debug) printf("Ch2: init_vol=%u, env_dir=%s, sw_pace=%u }\n", init_vol, env_dir, sw_pace);
+                channel2_volume = init_vol;
+                //TODO sweep pace, envelope direction
+            }
+            break;
+        case 0xFF19: // NR24
+             if ((b & 0b10000000) != 0) {
+                channel2_volume = (*NR22 & 0b11110000) >> 4;
+                channel2_playing = true;
+                uint16_t period = *NR23; 
+                uint16_t period_high = b & 0b00000111;
+                period_high = period_high << 8;
+                period |= period_high;
+                double frequency = (double)131072 / (2048 - period);
+                channel2_phase_increment = frequency / 44100.0f;
+                if (apu_debug) {
+                    puts("Ch2: triggered");
+                    printf("Ch2: initial volume = %u\n", channel2_volume);
+                    printf("Ch2: period = %u (%f Hz)\n", period, frequency);
+                }
+             }
+             break;
     }
 
 }
