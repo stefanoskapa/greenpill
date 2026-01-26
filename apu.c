@@ -38,6 +38,7 @@ uint8_t *NR51 = &mem[0xFF25];
  **/
 uint8_t *NR52 = &mem[0xFF26]; 
 
+uint8_t *NR10 = &mem[0xFF10];
 /*
  * NR11 - Channel 1 length timer & duty cycle
  * - 0-5: Initial length timer (write only)
@@ -99,12 +100,16 @@ static uint8_t channel1_volume = 0;
 static float channel1_phase = 0;
 static float channel1_phase_increment = 0;
 static uint8_t channel1_length = 0;
+static bool channel1_length_enabled = false;
+static uint8_t channel1_sweep_pace = 0;
+
 
 static bool channel2_playing = false;
 static uint8_t channel2_volume = 0;
 static float channel2_phase = 0;
 static float channel2_phase_increment = 0;
 static uint8_t channel2_length = 0;
+static bool channel2_length_enabled = false;
 
 SDL_AudioDeviceID audio_device;
 SDL_AudioSpec audio_spec;
@@ -131,16 +136,19 @@ void apu_step(int cycles) {
         cycles_per_sample_counter -= CYCLES_PER_SAMPLE;
         int16_t vol_steps = 100;
         int16_t sample = 0;
-        if (channel1_playing) {
+        if (channel1_playing && !(channel1_length_enabled && channel1_length == 64)) {
             sample += (channel1_phase < 0.5f) ? channel1_volume * vol_steps : channel1_volume * (-vol_steps);
             channel1_phase += channel1_phase_increment;
             if (channel1_phase >= 1.0f) channel1_phase -= 1.0f;
+            puts("ch1");
         }
 
-        if (channel2_playing) {
+        //if (channel2_playing) {
+        if (channel2_playing && !(channel2_length_enabled && channel2_length == 64)) {
             sample += (channel2_phase < 0.5f) ? channel2_volume * vol_steps : channel2_volume * (-vol_steps);
             channel2_phase += channel2_phase_increment;
             if (channel2_phase >= 1.0f) channel2_phase -= 1.0f;
+            puts("ch2");
         }
 
         SDL_QueueAudio(audio_device, &sample, sizeof(sample));
@@ -153,6 +161,24 @@ void audio_delay(void){
     }
 }
 
+//When the length timer reaches 64 (CH1, CH2, and CH4) or 256 (CH3), the channel is turned off.
+void inc_ch2_len() {
+    if (!channel2_length_enabled) return;
+    if (channel2_length == 64) {
+        channel2_playing = false;
+    } else {
+        channel2_length++;
+    }
+}
+
+void inc_ch1_len() {
+    if (!channel1_length_enabled) return;
+    if (channel1_length == 64) {
+        channel1_playing = false;
+    } else {
+        channel1_length++;
+    }
+}
 void apu_memw_callback(uint16_t addr, uint8_t b) {
 
     switch (addr) {
@@ -181,10 +207,16 @@ void apu_memw_callback(uint16_t addr, uint8_t b) {
                 period |= period_high;
                 double frequency = (double)131072 / (2048 - period);
                 channel1_phase_increment = frequency / 44100.0f;
+                channel1_length = *NR11 & 0b00111111;
+                channel1_length_enabled = (b & 0b01000000) != 0;
+                channel1_sweep_pace = (*NR10 & 0b01110000) >> 4;
                 if (apu_debug) {
                     puts("Ch1: triggered");
                     printf("Ch1: initial volume = %u\n", channel1_volume);
                     printf("Ch1: period = %u (%f Hz)\n", period, frequency);
+                    printf("Ch1: length = %u\n", channel1_length);
+                    printf("Ch1: length enabled = %s\n", channel1_length_enabled ? "YES": "NO");
+                    printf("CH1: sweep pace = %u\n", channel1_sweep_pace);
                 }
              }
              break;
@@ -204,10 +236,14 @@ void apu_memw_callback(uint16_t addr, uint8_t b) {
                 period |= period_high;
                 double frequency = (double)131072 / (2048 - period);
                 channel2_phase_increment = frequency / 44100.0f;
+                channel2_length = *NR21 & 0b00111111;
+                channel2_length_enabled = (b & 0b01000000) != 0;
                 if (apu_debug) {
                     puts("Ch2: triggered");
                     printf("Ch2: initial volume = %u\n", channel2_volume);
                     printf("Ch2: period = %u (%f Hz)\n", period, frequency);
+                    printf("Ch2: length = %u\n", channel2_length);
+                    printf("Ch2: length enabled = %s\n", channel1_length_enabled ? "YES": "NO");
                 }
              }
              break;

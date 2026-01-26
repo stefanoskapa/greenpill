@@ -252,9 +252,11 @@ void timer_step(int cycles) {
 
         } 
 
-        if (mem[0xFF04] % 64 == 0) {
-
+        if (mem[0xFF04] % 64 == 0) { //256 Hz
+            inc_ch1_len();
+            inc_ch2_len();
         } 
+
         if (mem[0xFF04] % 128 == 0) { // every 128 Hz
                                       // Ch1 freq sweep
         }
