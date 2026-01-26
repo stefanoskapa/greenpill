@@ -20,6 +20,10 @@ uint8_t *get_tile(int index);
 void check_joyp();
 static void load_rom(char *filename);
 
+bool debug = false;
+bool apu_debug = true;
+bool cpu_debug = false;
+
 uint8_t logo[] = {
     0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, 0x03, 0x73, 0x00, 0x83, 0x00, 0x0C, 0x00, 0x0D,
     0x00, 0x08, 0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E, 0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99,
@@ -49,9 +53,6 @@ static int rom_banks[] = {
 };
 
 SDL_Event event;
-bool debug = false;
-bool apu_debug = false;
-bool cpu_debug = false;
 uint8_t mem[2000000];
 /*
  * Serial transfer data
@@ -132,7 +133,7 @@ int main(int argc, char **argv) {
     while (true) {
 
         cycles = cpu_step();
-        if (debug) show_registers();
+        if (cpu_debug) show_registers();
 
         timer_step(cycles);
 

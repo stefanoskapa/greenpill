@@ -147,78 +147,6 @@ void apu_step(int cycles) {
     }
 }
 
-void chan1debug(uint8_t nr14) {
-
-    puts("---Channel 1 debug---");
-    if ((*NR52 & 0b10000000) == 0) {
-        puts("APU is OFF");
-    } else {
-        puts("APU is ON");
-    }
-
-    if ((*NR12 & 0xF8) == 0) {
-        puts("Channel 1 DAC is OFF");
-    } else {
-        puts("Channel 1 DAC is ON");
-    }
-
-    if (nr14 &0b1000000) {
-        puts("Channel 1 ON");
-    }
-
-    //NR11
-    uint8_t initial_length = *NR11 & 0b00111111;
-    uint8_t wave_duty = (*NR11 & 0b11000000) >> 6;
-    printf("NR11: wave_duty=%d, initial_length=%d\n",wave_duty, initial_length); 
-
-    //NR12
-    uint8_t initial_volume = (*NR12 & 0b11110000) >> 4;
-    uint8_t env_dir = (*NR12 & 0b00001000) >> 3;
-    uint8_t sweep_pace = (*NR12 & 0b00000111);
-    printf("NR12: initial_volume=%d, envelope_direction=%d, sweep_pace=%d\n", initial_volume, env_dir, sweep_pace);
-
-    //NR24
-    uint8_t trigger = (nr14 & 0b10000000) >> 7;
-    uint8_t length_enable = (nr14 & 0b01000000) >> 6;
-    printf("NR14: trigger=%d, length_enable=%d\n", trigger, length_enable);
-}
-
-void chan2debug(uint8_t nr24) {
-
-    puts("---Channel 2 debug---");
-    if ((*NR52 & 0b10000000) == 0) {
-        puts("APU is OFF");
-    } else {
-        puts("APU is ON");
-    }
-
-    if ((*NR22 & 0xF8) == 0) {
-        puts("Channel 2 DAC is OFF");
-    } else {
-        puts("Channel 2 DAC is ON");
-    }
-
-    if (nr24 &0b1000000) {
-        puts("Channel 2 ON");
-    }
-
-    //NR21
-    uint8_t initial_length = *NR21 & 0b00111111;
-    uint8_t wave_duty = (*NR21 & 0b11000000) >> 6;
-    printf("NR21: wave_duty=%d, initial_length=%d\n",wave_duty, initial_length); 
-
-    //NR22
-    uint8_t initial_volume = (*NR22 & 0b11110000) >> 4;
-    uint8_t env_dir = (*NR22 & 0b00001000) >> 3;
-    uint8_t sweep_pace = (*NR22 & 0b00000111);
-    printf("NR22: initial_volume=%d, envelope_direction=%d, sweep_pace=%d\n", initial_volume, env_dir, sweep_pace);
-
-    //NR24
-    uint8_t trigger = (nr24 & 0b10000000) >> 7;
-    uint8_t length_enable = (nr24 & 0b01000000) >> 6;
-    printf("NR24: trigger=%d, length_enable=%d\n", trigger, length_enable);
-}
-
 void audio_delay(void){
     while (SDL_GetQueuedAudioSize(audio_device) > 4000 ) {
         SDL_Delay(1);
@@ -226,7 +154,6 @@ void audio_delay(void){
 }
 
 void apu_memw_callback(uint16_t addr, uint8_t b) {
-
 
     switch (addr) {
         case 0xFF26: //NR52
@@ -242,14 +169,7 @@ void apu_memw_callback(uint16_t addr, uint8_t b) {
             if ((b & 0b11111000) == 0) { // DAC is turned off
                channel1_playing = false;
                if (apu_debug) puts("Ch1: DAC turned OFF");
-            } else {
-                uint8_t init_vol = (b & 0b11110000) >> 4;
-                uint8_t sw_pace = b & 0b00000111;
-                char *env_dir = (b & 0b00001000) == 0 ? "down" : "up";
-                if (apu_debug) printf("Ch1: init_vol=%u, env_dir=%s, sw_pace=%u }\n", init_vol, env_dir, sw_pace);
-                channel1_volume = init_vol;
-                //TODO sweep pace, envelope direction
-            }
+            } 
             break;
         case 0xFF14: // NR14
              if ((b & 0b10000000) != 0) {
@@ -269,17 +189,10 @@ void apu_memw_callback(uint16_t addr, uint8_t b) {
              }
              break;
         case 0xFF17: // NR22
-            if ((b & 0xF8) == 0) { 
+            if ((b & 0b11111000) == 0) { 
                channel2_playing = false;
                if (apu_debug) puts("Ch2: DAC turned OFF");
-            } else {
-                uint8_t init_vol = (b & 0b11110000) >> 4;
-                uint8_t sw_pace = b & 0b00000111;
-                char *env_dir = (b & 0b00001000) == 0 ? "down" : "up";
-                if (apu_debug) printf("Ch2: init_vol=%u, env_dir=%s, sw_pace=%u }\n", init_vol, env_dir, sw_pace);
-                channel2_volume = init_vol;
-                //TODO sweep pace, envelope direction
-            }
+            } 
             break;
         case 0xFF19: // NR24
              if ((b & 0b10000000) != 0) {
