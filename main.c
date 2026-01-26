@@ -597,6 +597,9 @@ uint8_t *get_tile(int index) {
 }
 bool halted = false;
 int cpu_step(void) {
+    if (halted) {
+        return 4;
+    }
     if (ime_scheduled) {
         IME = true;
         ime_scheduled = false;
@@ -1346,14 +1349,14 @@ int cpu_step(void) {
                    return 8;
         case 0x76: // HALT    b1 c4 flags:----
                    if (debug) printf("HALT\n");
-                   if (halted) {
-                       if (((*IF & *IE) != 0) || IME == true) {
-                           halted = false;
-                           PC += 1;
-                           return 4;
-                       }
+                   if (IME == true) {
+                       halted = true;
+                   } else if ((*IF & *IF) == 0) { 
+                        halted = true;
+                   } else { // TODO: implement hardware bug
+                       halted = false;
                    }
-                   halted = true;
+                   PC += 1;
                    return 4;
         case 0x77: // LD [HL], A    b1 c8 flags:----
                    if (debug) printf("LD [HL], A\n");
@@ -3194,6 +3197,9 @@ void timer_step(int cycles) {
 }
 
 void handle_interrupts(void) {
+    if (IME == false) {
+        return;
+    }
     if ((*IE & *IF & 0b00000001) == 0b00000001) { // VBlank
         IME = false;
         *IF = (*IF & 0b11111110);
@@ -3230,6 +3236,7 @@ void handle_interrupts(void) {
         PC = 0x60;
         if (debug) printf("<Joypad Interrupt>\n");
     }
+    halted = false;
 }
 
 
