@@ -41,6 +41,7 @@
 #define SAMPLE_RATE 48000
 #define AMPLITUDE   28000
 
+void chan1debug(uint8_t nr14);
 uint64_t timer_diff(struct timespec *start, struct timespec *end);
 uint8_t mem_read8(uint16_t addr);
 int cpu_step(void);
@@ -58,6 +59,7 @@ void timer_step(int cycles);
 void handle_interrupts(void);
 uint8_t *get_tile(int index);
 void show_frame();
+
 void send_word_to_buffer(uint8_t byte1, uint8_t byte2, int x, bool is_obj, uint8_t flags);
 void print_bin8(uint8_t v);
 void check_joyp();
@@ -260,11 +262,13 @@ bool channel1_playing = false;
 uint8_t channel1_volume = 0;
 float channel1_phase = 0;
 float channel1_phase_increment = 0;
+uint8_t channel1_length = 0;
 
 bool channel2_playing = false;
 uint8_t channel2_volume = 0;
 float channel2_phase = 0;
 float channel2_phase_increment = 0;
+uint8_t channel2_length = 0;
 
 float cycles_per_sample_counter = 0;
 
@@ -368,8 +372,10 @@ int main(int argc, char **argv) {
         apu_step(cycles);
 
         frame_cycles += cycles;
+        //static uint8_t frame_count_sound1 = 0;
         if (frame_cycles >= CYCLES_PER_FRAME) {
             frame_cycles -= CYCLES_PER_FRAME;
+            
 
             check_joyp();
             while (SDL_GetQueuedAudioSize(audio_device) > 4000 ) {
@@ -2588,12 +2594,25 @@ void mem_write8(uint16_t addr, uint8_t b) {
         return;
     }
 
+
     // Channel 2 square wave
+    if (addr == 0xFF17) { // NR22
+        if ((*NR22 & 0xF8) == 0) { // DAC is turned off
+           channel2_playing = false;
+           puts("channel 2 DAC is turned off");
+        }
+    }
+    if (addr == 0xFF12) { // NR12
+        if ((*NR12 & 0xF8) == 0) { // DAC is turned off
+           channel1_playing = false;
+           puts("channel 1 DAC is turned off");
+        }
+    }
     if (addr == 0xFF19) { // channel 2 period high & control register (NR24) 
-                          //chan2debug(b);
-        if ((*NR52 & 0b10000000) == 0) {
+                          chan2debug(b);
+        if ((*NR52 & 0b10000000) == 0) { // Audio off
             channel2_playing = false;
-        } else if ((*NR22 & 0xF8) == 0) { //DAC is turned off
+        } else if ((*NR22 & 0xF8) == 0) { // DAC is turned off
             channel2_playing = false;
         } else if ((b & 0b10000000) != 0) {
             uint8_t initial_volume = (*NR22 & 0b11110000) >> 4;
@@ -2602,6 +2621,13 @@ void mem_write8(uint16_t addr, uint8_t b) {
             channel2_phase = 0;
             uint16_t period = *NR23; 
 
+            if ((*NR24 & 0b01000000) != 0) { //length enabled
+                puts("channel 2 length enabled");
+                if (channel2_length == 0b00111111) {
+                    channel2_length = *NR21 & 0b00111111; // initial length
+                    printf("Channel 2 length was set at %u\n", channel2_length);
+                }
+            }
             uint16_t ph = b & 0b00000111;
             ph = ph << 8;
             period |= ph;
@@ -2611,7 +2637,8 @@ void mem_write8(uint16_t addr, uint8_t b) {
     }
 
     if (addr == 0xFF14) { // channel 1 period high & control register (NR24) 
-        if ((*NR52 & 0b10000000) == 0) {
+        chan1debug(b);
+        if ((*NR52 & 0b10000000) == 0) { // Audio off
             channel1_playing = false;
         } else if ((*NR12 & 0xF8) == 0) { //DAC is turned off
             channel1_playing = false;
@@ -2621,6 +2648,12 @@ void mem_write8(uint16_t addr, uint8_t b) {
             channel1_playing = true;
             channel1_phase = 0;
             uint16_t period = *NR13; 
+            if ((*NR14 & 0b01000000) != 0) { //length enabled
+                if (channel1_length == 0b00111111) {
+                    channel1_length = *NR11 & 0b00111111; // initial length
+                    printf("Channel 1 length was set at %u\n", channel1_length);
+                }
+            }
 
             uint16_t ph = b & 0b00000111;
             ph = ph << 8;
@@ -3064,7 +3097,7 @@ int div_counter = 0;
 void timer_step(int cycles) {
     // DIV register increments every 256 cycles
     div_counter += cycles;
-    while (div_counter >= 256) {
+    if (div_counter >= 256) {
         div_counter -= 256;
         mem[0xFF04]++;  // DIV register
 
@@ -3077,12 +3110,12 @@ void timer_step(int cycles) {
                 if (pace_counter1 == ch1pace) {
                     if ((*NR12 & 0b00001000) != 0 ) { //increasing
                         channel1_volume++;
-                    } else {
-                        channel1_volume--;
+                    } else { //decreasing
+                        if (channel1_volume != 0) channel1_volume--;
                     }
                     pace_counter1 = 0;
                 } else {
-                    pace_counter1 ++;
+                    pace_counter1++;
                 }
 
             }
@@ -3093,18 +3126,43 @@ void timer_step(int cycles) {
                 if (pace_counter2 == ch2pace) {
                     if ((*NR22 & 0b00001000) != 0 ) { //increasing
                         channel2_volume++;
-                    } else {
-                        channel2_volume--;
+                    } else { // decreasing
+                        if (channel2_volume != 0) {
+                            channel2_volume--;
+                            printf("Channel 2 volume decreased to %d\n", channel2_volume);
+                        } else {
+                            puts("Channel 2 volume is zero");
+                        }
                     }
                     pace_counter2 = 0;
                 } else {
-                    pace_counter2 ++;
+                    pace_counter2++;
                 }
 
             }
         } 
-        if (mem[0xFF04] % 64 == 0) { // every 256 Hz
-                                     // sound length
+
+        if (mem[0xFF04] % 64 == 0) { // every 256 Hz increment sound length
+            if ((*NR14 & 0b01000000) != 0) { // length enabled channel 1
+                if (channel1_length == 0b01000000) {
+                    puts("channel1 length full. Turning off channel 1");
+                    channel1_playing = false; 
+                } else {
+                    channel1_length++;                         
+                    printf("Channel 1 length was increased to %u\n", channel1_length);
+                }
+            }
+            
+            if ((*NR24 & 0b01000000) != 0) { // length enabled channel 2
+                if (channel2_length == 0b01000000) {
+                    puts("channel2 length full. Turning off channel2");
+                    channel2_playing = false;
+                } else {
+                    channel2_length++;                         
+                    printf("Channel 2 length was increased to %u\n", channel2_length);
+                }
+            }
+
         } 
         if (mem[0xFF04] % 128 == 0) { // every 128 Hz
                                       // Ch1 freq sweep
@@ -3181,7 +3239,7 @@ void apu_step(int cycles) {
     cycles_per_sample_counter += cycles;
     if (cycles_per_sample_counter >= CYCLES_PER_SAMPLE) {
         cycles_per_sample_counter -= CYCLES_PER_SAMPLE;
-        int16_t vol_steps = 1000;
+        int16_t vol_steps = 100;
         int16_t sample = 0;
         if (channel1_playing) {
             sample += (channel1_phase < 0.5f) ? channel1_volume * vol_steps : channel1_volume * (-vol_steps);
@@ -3199,10 +3257,46 @@ void apu_step(int cycles) {
     }
 }
 
+void chan1debug(uint8_t nr14) {
+
+//    return;
+    puts("---Channel 1 debug---");
+    if ((*NR52 & 0b10000000) == 0) {
+        puts("APU is OFF");
+    } else {
+        puts("APU is ON");
+    }
+
+    if ((*NR12 & 0xF8) == 0) {
+        puts("Channel 1 DAC is OFF");
+    } else {
+        puts("Channel 1 DAC is ON");
+    }
+
+    if (nr14 &0b1000000) {
+        puts("Channel 1 ON");
+    }
+
+    //NR11
+    uint8_t initial_length = *NR11 & 0b00111111;
+    uint8_t wave_duty = (*NR11 & 0b11000000) >> 6;
+    printf("NR11: wave_duty=%d, initial_length=%d\n",wave_duty, initial_length); 
+
+    //NR12
+    uint8_t initial_volume = (*NR12 & 0b11110000) >> 4;
+    uint8_t env_dir = (*NR12 & 0b00001000) >> 3;
+    uint8_t sweep_pace = (*NR12 & 0b00000111);
+    printf("NR12: initial_volume=%d, envelope_direction=%d, sweep_pace=%d\n", initial_volume, env_dir, sweep_pace);
+
+    //NR24
+    uint8_t trigger = (nr14 & 0b10000000) >> 7;
+    uint8_t length_enable = (nr14 & 0b01000000) >> 6;
+    printf("NR14: trigger=%d, length_enable=%d\n", trigger, length_enable);
+}
 
 void chan2debug(uint8_t nr24) {
 
-    return;
+//    return;
     puts("---Channel 2 debug---");
     if ((*NR52 & 0b10000000) == 0) {
         puts("APU is OFF");
