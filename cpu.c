@@ -1,0 +1,2087 @@
+#include <stdlib.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+
+// combined 8-bit registers
+#define AF  ((F & 0xF0) | (A << 8))
+#define BC  (C | (B << 8))
+#define DE  (E | (D << 8))
+#define HL  (L | (H << 8))
+
+// z - zero flag (7th bit)
+#define SETF_Z F = (F | 0b10000000)
+#define CLRF_Z F = (F & 0b01111111)
+#define READF_Z ((F & 0b10000000) != 0)
+// n - subtraction flag (BCD) (6th bit)
+#define SETF_N F = (F | 0b01000000)
+#define CLRF_N F = (F & 0b10111111)
+#define READF_N ((F & 0b01000000) != 0)
+// h - half-carry flag (BCD) (5th bit)
+#define SETF_H F = (F | 0b00100000)
+#define CLRF_H F = (F & 0b11011111)
+#define READF_H ((F & 0b00100000) != 0)
+// c - carry flag (4th bit)
+#define SETF_C F = (F | 0b00010000)
+#define CLRF_C F = (F & 0b11101111)
+#define READF_C ((F & 0b00010000) != 0)
+void inc_reg16(uint8_t *low, uint8_t *high);
+void dec_reg16(uint8_t *low, uint8_t *high);
+
+/*
+ * Interrupt Master Enable flag
+ * 
+ * IME is a flag internal to the CPU that controls
+ * whether any interrupt handlers are called,
+ * regardless of the contents of IE. IME is only
+ * modified by:
+ * - ei instruction
+ * - di instruction
+ * - reti instruction (same as ei followed by ret)
+ * - When an interrupt handler is executed.
+ *
+ * IME is unset when the game start running.
+ */
+static bool IME = false;
+static bool ime_scheduled = false;
+static bool halted = false;
+
+static uint8_t A = 0; // A
+static uint8_t F = 0; // Flags register (can't be accesed directly)
+static uint8_t B = 0; // BC high
+static uint8_t C = 0; // BC low
+static uint8_t D = 0; // DE high
+static uint8_t E = 0; // DE low
+static uint8_t H = 0; // HL high
+static uint8_t L = 0; // HL low
+static uint16_t SP;
+static uint16_t PC;
+
+extern uint8_t mem_read8(uint16_t addr);
+extern void mem_write8(uint16_t addr, uint8_t b);
+extern void mem_write8(uint16_t addr, uint8_t b);
+extern void mem_write16(uint16_t addr, uint16_t b);
+
+extern uint8_t *IF;
+extern uint8_t *IE;
+extern bool cpu_debug;
+
+void cpu_init(void) {
+    A = 0x01;
+    F = 0xB0;
+    B = 0x00;
+    C = 0x13;
+    D = 0x00;
+    E = 0xD8;
+    H = 0x01;
+    L = 0x4D;
+    PC = 0x0100;
+    SP = 0x0000;
+    SP = 0xFFFE;
+}
+
+int cpu_step(void) {
+    if (halted) {
+        return 4;
+    }
+    if (ime_scheduled) {
+        IME = true;
+        ime_scheduled = false;
+    }
+    uint8_t n8 = 0;   // 8-bit integer signed or unsigned
+    uint16_t n16 = 0; // 16-bit integer signed or unsigned
+    int8_t e8 = 0;    // 8-bit signed offset!
+    uint8_t a8 = 0;   // unsigned Offset added to 0xFF00
+    uint16_t a16 = 0; // absolute offset, always unsigned
+    uint8_t op = mem_read8(PC);
+    switch (op) {
+        case 0x00: // NOP    b1 c4 flags:----
+            if (cpu_debug) printf("NOP\n");
+            PC += 1; 
+            return 4;
+        case 0x01: // LD BC, <n16>    b3 c12 flags:----
+            B = mem_read8(PC + 2);
+            C = mem_read8(PC + 1);
+            n16 = C | (B << 8);
+            if (cpu_debug) printf("LD BC, 0x%04X\n", n16);
+            PC += 3;
+            return 12;
+        case 0x02: // LD [BC], A    b1 c8 flags:----
+            if (cpu_debug) printf("LD [BC], A\n");
+            mem_write8(BC, A);
+            PC += 1;
+            return 8;
+        case 0x03: // INC BC    b1 c8 flags:----
+            if (cpu_debug) printf("INC BC\n");
+            inc_reg16(&C, &B);
+            PC += 1;
+            return 8;
+        case 0x04: // INC B    b1 c4 flags:Z0H-
+            if (cpu_debug) printf("INC B\n");
+            if ((B & 0x0F) == 0x0F) SETF_H; else CLRF_H;
+            B++;
+            if (B == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            PC += 1;
+            return 4;
+        case 0x05:  // DEC B    b1 c4 flags:Z1H-
+            if (cpu_debug) printf("DEC B\n");
+            if ((B & 0x0F) == 0x00) SETF_H; else CLRF_H;
+            B--;
+            if (B == 0) SETF_Z; else CLRF_Z;
+            SETF_N;
+            PC += 1;
+            return 4;
+        case 0x06: // LD B, <n8>   b2 c8 flags:----
+            B = mem_read8(PC + 1);
+            if (cpu_debug) printf("LD B, 0x%02X\n", B);
+            PC += 2;
+            return 8;
+        case 0x07: // RLCA    b1 c4 flags:000C
+            if (cpu_debug) printf("RLCA\n");
+            if ((A & 0b10000000) != 0) SETF_C; else CLRF_C;
+            A = (A << 1);
+            if (READF_C) A = (A | 0x01);
+            CLRF_Z; CLRF_N; CLRF_H;
+            PC += 1;
+            return 4;
+        case 0x08: // LD [a16], SP    b3 c20 flags=----
+            a16 = mem_read8(PC + 1) | (mem_read8(PC + 2) << 8); 
+            if (cpu_debug) printf("LD [0x%04X], SP\n", a16);
+            mem_write8(a16, SP & 0xFF);
+            mem_write8(a16 + 1, SP >> 8);
+            PC += 3;
+            return 20;
+        case 0x09: // ADD HL, BC    b1 c8 flags:-0HC
+            if (cpu_debug) printf("ADD HL, BC\n");
+            {
+                uint16_t hl = HL;
+                uint32_t result = hl + BC;
+                if (result > 0xFFFF) SETF_C; else CLRF_C;
+                if (((hl & 0x0FFF) + (BC & 0x0FFF)) > 0x0FFF) SETF_H; else CLRF_H;
+                CLRF_N;
+                H = (result >> 8) & 0xFF;
+                L = result & 0xFF;
+            }
+            PC += 1;
+            return 8;
+        case 0x0A:  // LD A, [BC]    b1 c8 flags:----
+            if (cpu_debug) printf("LD A, [BC]\n");
+            A = mem_read8(C | (B << 8));
+            PC += 1;
+            return 8;
+        case 0x0B: // DEC BC    b1 c8 flags:----
+            if (cpu_debug) printf("DEC BC\n");
+            dec_reg16(&C, &B);
+            PC += 1;
+            return 8;
+        case 0x0C: // INC C    b1 c4 flags:Z0HC
+            if (cpu_debug) printf("INC C\n");
+            if ((C & 0x0F) == 0x0F) SETF_H; else CLRF_H;
+            C++;
+            if (C == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            PC += 1;
+            return 4;
+        case 0x0D: // DEC C    b1 c4 flags:Z1H-
+            if (cpu_debug) printf("DEC C\n");
+            if ((C & 0x0F) == 0x00) SETF_H; else CLRF_H;
+            C--;
+            if (C == 0) SETF_Z; else CLRF_Z;
+            SETF_N;
+            PC += 1;
+            return 4;
+        case 0x0E: // LD C, <n8>    b2 c8 flags:----
+            C = mem_read8(PC + 1);
+            if (cpu_debug) printf("LD C, 0x%02X\n", C);
+            PC += 2;
+            return 8;
+        case 0x0F: // RRCA    b1 c4 flags:000C
+            if (cpu_debug) printf("RRCA\n");
+            CLRF_Z; CLRF_N; CLRF_H;
+            if ((A & 0b00000001) == 0) CLRF_C; else SETF_C;
+            A = (A >> 1) | (A << 7);         
+            PC += 1;
+            return 4;
+        case 0x11: // LD DE, <n16>    b3 c12 flags:----
+            n16 = mem_read8(PC + 1) | (mem_read8(PC + 2) << 8);
+            if (cpu_debug) printf("LD DE, 0x%04X\n", n16);
+            D = mem_read8(PC + 2);
+            E = mem_read8(PC + 1);
+            PC += 3;
+            return 12;
+        case 0x12: // LD [DE], A    b1 c8 flags:----
+            if (cpu_debug) printf("LD [DE], A\n");
+            mem_write8(DE, A);
+            PC += 1;
+            return 8;
+        case 0x13: // INC DE    b1 c8 flags:---- 
+            if (cpu_debug) printf("INC DE\n");
+            inc_reg16(&E, &D);
+            PC += 1;
+            return 8;
+        case 0x14: // INC D    b1 c4 flags:Z0H-
+            if (cpu_debug) printf("INC D\n");
+            if ((D & 0x0F) == 0x0F) SETF_H; else CLRF_H;
+            CLRF_N;
+            D++;
+            if (D == 0) SETF_Z; else CLRF_Z;
+            PC += 1;
+            return 4;
+        case 0x15:  // DEC D    b1 c4 flags:Z1H-
+            if (cpu_debug) printf("DEC D\n");
+            if ((D & 0x0F) == 0x00) SETF_H; else CLRF_H;
+            D--;
+            if (D == 0) SETF_Z; else CLRF_Z;
+            SETF_N;
+            PC += 1;
+            return 4;
+        case 0x16: // LD D, <n8>    b2 c8 flags:----
+            n8 = mem_read8(PC + 1);
+            if (cpu_debug) printf("LD D, 0x%02X\n", n8);
+            D = n8;
+            PC += 2;
+            return 8;
+        case 0x17: // RLA    b1 c4 flags:000C
+            {
+                if (cpu_debug) printf("RLA\n");
+                bool oldCarry = READF_C;
+                if (A & 0b10000000) SETF_C; else CLRF_C;
+                A = (A << 1);
+                if (oldCarry) A |= 0x01;  
+                CLRF_Z; CLRF_N; CLRF_H;
+                PC += 1;
+            }
+            return 4;
+        case 0x18: // JR <e8>    b2 c12 flags:----
+            e8 = (int8_t)mem_read8(PC + 1);
+            if (cpu_debug) printf("JR 0x%04X\n", e8 + PC);
+            PC += 2;
+            PC += e8;
+            return 12;
+        case 0x19: // ADD HL, DE    b1 c8 flags:-0HC
+            if (cpu_debug) printf("ADD HL, DE\n");
+            {
+                uint16_t hl = HL;
+                uint32_t result = hl + DE;
+                if (result > 0xFFFF) SETF_C; else CLRF_C;
+                if (((hl & 0x0FFF) + (DE & 0x0FFF)) > 0x0FFF) SETF_H; else CLRF_H;
+                CLRF_N;
+                H = (result >> 8) & 0xFF;
+                L = result & 0xFF;
+            }
+            PC += 1;
+            return 8;
+        case 0x1A:  // LD A, [DE]    b1 c8 flags:----
+            if (cpu_debug) printf("LD A, [DE]\n");
+            A = mem_read8(E | (D << 8));
+            PC += 1;
+            return 8;
+        case 0x1B: // DEC DE    b1 c8 flags:----
+            if (cpu_debug) printf("DEC DE\n");
+            dec_reg16(&E, &D);
+            PC += 1;
+            return 8;
+        case 0x1C: // INC E    b1 c4 flags:Z0H-
+            if (cpu_debug) printf("INC E\n");
+            if ((E & 0x0F) == 0x0F) SETF_H; else CLRF_H;
+            CLRF_N;
+            E++;
+            if (E == 0) SETF_Z; else CLRF_Z;
+            PC += 1;
+            return 4;
+        case 0x1D:  // DEC E    b1 c4 flags:Z1H-
+            if (cpu_debug) printf("DEC E\n");
+            if ((E & 0x0F) == 0x00) SETF_H; else CLRF_H;
+            E--;
+            if (E == 0) SETF_Z; else CLRF_Z;
+            SETF_N;
+            PC += 1;
+            return 4;
+        case 0x1E: // LD E, <n8>    b2 c8 flags:----
+            n8 = mem_read8(PC + 1);
+            if (cpu_debug) printf("LD E, 0x%02X\n", n8);
+            E = n8;
+            PC += 2;
+            return 8;
+        case 0x1F: // RRA    b1 c4 flags:000C
+            if (cpu_debug) printf("RRA\n");
+            bool oldCarry = READF_C;  // Save old carry FIRST
+            if (A & 0x01) SETF_C; else CLRF_C;  // Bit 0 -> new carry
+            A = (A >> 1);
+            if (oldCarry) A |= 0x80;  // Old carry -> bit 7
+            CLRF_Z; CLRF_N; CLRF_H;
+            PC += 1;
+            return 4;
+        case 0x20: // JR NZ, <e8>    b2 c12,8 flags:----
+            e8 = (int8_t)mem_read8(PC + 1);
+            if (cpu_debug) printf("JR NZ, 0x%02X\n", e8);
+            PC += 2;
+            if (!READF_Z) {
+                PC += e8;
+                return 12;
+            } else {
+                return 8;
+            }
+            return 12; 
+        case 0x21: // LD HL, <n16>    b3 c12 flags:----
+            H = mem_read8(PC + 2);
+            L = mem_read8(PC + 1);
+            n16 = L | (H << 8);
+            if (cpu_debug) printf("LD HL, 0x%04X\n", n16);
+            PC += 3;
+            return 12;
+        case 0x22:  // LD [HL+], A    b1 c8 flags:----
+            if (cpu_debug) printf("LD [HL+], A\n");
+            mem_write8(L | (H << 8), A);
+            inc_reg16(&L, &H);
+            PC += 1;
+            return 8;
+        case 0x23: // INC HL    b1 c8 flags:----
+            if (cpu_debug) printf("INC HL\n");
+            inc_reg16(&L, &H);
+            PC += 1;
+            return 8;
+        case 0x24:  // INC H    b1 c4 flags=Z0H- 
+            if (cpu_debug) printf("INC H\n");
+            if ((H & 0x0F) == 0x0F) SETF_H; else CLRF_H;
+            H++;
+            if (H == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            PC += 1;
+            return 4;
+        case 0x25:  // DEC H    b1 c4 flags:Z1H-
+            if (cpu_debug) printf("DEC H\n");
+            if ((H & 0x0F) == 0x00) SETF_H; else CLRF_H;
+            H--;
+            if (H == 0) SETF_Z; else CLRF_Z;
+            SETF_N;
+            PC += 1;
+            return 4;
+        case 0x26: // LD H, <n8>    b2 c8 flags:----
+            H = mem_read8(PC + 1);
+            if (cpu_debug) printf("LD H, 0x%02X\n", B);
+            PC += 2;
+            return 8;
+        case 0x27: // DAA    b1 c4 flags:Z-0C
+            if (cpu_debug) printf("DAA\n");
+            {
+                uint8_t correction = 0;
+
+                if (READF_N) {
+                    // After subtraction
+                    if (READF_H) correction |= 0x06;
+                    if (READF_C) correction |= 0x60;
+                    A -= correction;
+                } else {
+                    // After addition
+                    if (READF_H || (A & 0x0F) > 0x09) correction |= 0x06;
+                    if (READF_C || A > 0x99) {
+                        correction |= 0x60;
+                        SETF_C;
+                    }
+                    A += correction;
+                }
+
+                if (A == 0) SETF_Z; else CLRF_Z;
+                CLRF_H;
+            }
+            PC += 1;
+            return 4;
+        case 0x28: // JR Z, <e8>    b2 c12,8 flags:----
+            e8 = (int8_t)mem_read8(PC + 1);
+            if (cpu_debug) printf("JR Z, 0x%02X\n", e8);
+            PC += 2;
+            if (READF_Z) {
+                PC += e8;
+                return 12;
+            } else {
+                return 8;
+            }
+            return 12; 
+        case 0x29: // ADD HL, HL    b1 c8 flags:-0HC
+            if (cpu_debug) printf("ADD HL, HL\n");
+            {
+                uint16_t hl = HL;
+                uint32_t result = hl + hl;
+                if (result > 0xFFFF) SETF_C; else CLRF_C;
+                if (((hl & 0x0FFF) + (hl & 0x0FFF)) > 0x0FFF) SETF_H; else CLRF_H;
+                CLRF_N;
+                // Z flag is NOT affected
+                H = (result >> 8) & 0xFF;
+                L = result & 0xFF;
+            }
+            PC += 1;
+            return 8;
+        case 0x2A:  // LD A, [HL+]    b1 c8 flags:----
+            if (cpu_debug) printf("LD A, [HL+]\n");
+            A = mem_read8(L | (H << 8));
+            inc_reg16(&L, &H);
+            PC += 1;
+            return 8;
+        case 0x2B: // DEC HL    b1 c8 flags:----
+            if (cpu_debug) printf("DEC HL\n");
+            dec_reg16(&L, &H);
+            PC += 1;
+            return 8;
+        case 0x2C:  // INC L    b1 c4 flags:Z0H- 
+            if (cpu_debug) printf("INC L\n");
+            if ((L & 0x0F) == 0x0F) SETF_H; else CLRF_H;
+            L++;
+            if (L == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            PC += 1;
+            return 4;
+        case 0x2D:  // DEC L    b1 c4 flags:Z1H-
+            if (cpu_debug) printf("DEC L\n");
+            if ((L & 0x0F) == 0x00) SETF_H; else CLRF_H;
+            L--;
+            if (L == 0) SETF_Z; else CLRF_Z;
+            SETF_N;
+            PC += 1;
+            return 4;
+        case 0x2E: // LD L, <n8>    b2 c8 flags:----
+            L = mem_read8(PC + 1);
+            if (cpu_debug) printf("LD L, 0x%02X\n", mem_read8(PC + 1));
+            PC += 2;
+            return 8;
+        case 0x2F: // CPL    b1 c4 flags:-11-
+            if (cpu_debug) printf("CPL\n");
+            A = ~A;
+            SETF_N; SETF_H;
+            PC += 1;
+            return 4;
+        case 0x30: // JR NC, <e8>    b2 c12,8 flags:----
+            e8 = (int8_t)mem_read8(PC + 1);
+            if (cpu_debug) printf("JR NC, 0x%04X\n", PC + 2 + e8);
+            PC += 2;
+            if (!READF_C) {
+                PC += e8;
+                return 12;
+            }
+            return 8;
+        case 0x31: // LD SP, <n16>    b3 c12 flags:----
+            n16 = mem_read8(PC + 1) | (mem_read8(PC + 2) << 8);
+            if (cpu_debug) printf("LD SP, 0x%04X\n", n16);
+            SP = n16;
+            PC += 3;
+            return 12;
+        case 0x32: // LD [HL-], A    b1 c8 flags:----
+            if (cpu_debug) printf("LD [HL-], A\n");
+            mem_write8(L | (H << 8), A); 
+            dec_reg16(&L, &H);
+            PC += 1;
+            return 8;
+        case 0x33: // INC SP    b1 c8 flags:----
+            if (cpu_debug) printf("INC SP\n");
+            SP++;
+            PC += 1;
+            return 8;
+        case 0x34: // INC [HL]    b1 c12 flags:Z0H-
+            if (cpu_debug) printf("INC [HL]\n");
+            mem_write8(HL, mem_read8(HL) + 1);
+            if (mem_read8(HL) == 0) SETF_Z; else CLRF_Z;
+            CLRF_N;
+            if ((mem_read8(HL) & 0x0F) == 0x00) SETF_H; else CLRF_H;
+            PC += 1;
+            return 12;
+        case 0x35: {
+                       if (cpu_debug) printf("DEC [HL]\n");
+                       uint8_t val = mem_read8(HL) - 1;
+                       mem_write8(HL, val);
+                       if (val == 0) SETF_Z; else CLRF_Z;
+                       SETF_N;
+                       if ((val & 0x0F) == 0x0F) SETF_H; else CLRF_H;
+                       PC += 1;
+                       return 12;
+                   }
+        case 0x36: // LD [HL], <n8>    b2 c12 flags:----
+                   n8 = mem_read8(PC + 1);
+                   if (cpu_debug) printf("LD [HL], 0x%02X\n", n8);
+                   mem_write8(HL, n8);
+                   PC += 2;
+                   return 12;
+        case 0x38: // JR C, <e8>    b2 c12,8 flags:----
+                   e8 = (int8_t)mem_read8(PC + 1);
+                   if (cpu_debug) printf("JR C, 0x%02X\n", e8);
+                   PC += 2;
+                   if (READF_C) {
+                       PC += e8;
+                       return 12;
+                   } 
+                   return 8;
+        case 0x39: // ADD HL, SP    b1 c8 flags:-0HC
+                   if (cpu_debug) printf("ADD HL, SP\n");
+                   {
+                       uint16_t hl = HL;
+                       uint32_t result = hl + SP;
+                       if (result > 0xFFFF) SETF_C; else CLRF_C;
+                       if (((hl & 0x0FFF) + (SP & 0x0FFF)) > 0x0FFF) SETF_H; else CLRF_H;
+                       CLRF_N;
+                       H = (result >> 8) & 0xFF;
+                       L = result & 0xFF;
+                   }
+                   PC += 1;
+                   return 8;
+        case 0x3A:  // LD A, [HL-]    b1 c8 flags:----
+                   if (cpu_debug) printf("LD A, [HL-]\n");
+                   A = mem_read8(L | (H << 8));
+                   dec_reg16(&L, &H);
+                   PC += 1;
+                   return 8;
+        case 0x3B: // DEC SP    b1 c8 flags:----
+                   if (cpu_debug) printf("DEC SP\n");
+                   SP--;
+                   PC += 1;
+                   return 8;
+        case 0x3C: // INC A    b1 c4 flags:Z0H-
+                   if (cpu_debug) printf("INC A\n");
+                   if ((A & 0x0F) == 0x0F) SETF_H; else CLRF_H;
+                   A++;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   PC += 1;
+                   return 4;
+        case 0x3D:  // DEC A    b1 c4 flags:Z1H-
+                   if (cpu_debug) printf("DEC A\n");
+                   if ((A & 0x0F) == 0x00) SETF_H; else CLRF_H;
+                   A--;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   SETF_N;
+                   PC += 1;
+                   return 4;
+        case 0x3E: // LD A, <n8>    b2 c8 flags:----
+                   A = mem_read8(PC + 1);
+                   if (cpu_debug) printf("LD A, 0x%02X\n", mem_read8(PC + 1));
+                   PC += 2;
+                   return 8;
+        case 0x37: // SCF    b1 c4 flags:-001
+                   if (cpu_debug) printf("SCF\n");
+                   CLRF_N; CLRF_H;
+                   SETF_C;
+                   PC += 1;
+                   return 4;
+        case 0x3F: // CCF    b1 c4 flags:-00~C
+                   if (cpu_debug) printf("CCF\n");
+                   if (READF_C) CLRF_C; else SETF_C;
+                   CLRF_N; CLRF_H;
+                   PC += 1;
+                   return 4;
+        case 0x40: // LD B, B    b1, c4 flags:----
+                   if (cpu_debug) printf("LD B, B\n"); //essentially a NOP
+                   PC += 1;
+                   return 4;
+        case 0x41: // LD B, C    b1 c4 flags:----
+                   if (cpu_debug) printf("LD B, C\n");
+                   B = C;
+                   PC += 1;
+                   return 4;
+        case 0x42: // LD B, D    b1 c4 flags:----
+                   if (cpu_debug) printf("LD B, D\n");
+                   B = D;
+                   PC += 1;
+                   return 4;
+        case 0x43: // LD B, E    b1 c4 flags:----
+                   if (cpu_debug) printf("LD B, E\n");
+                   B = E;
+                   PC += 1;
+                   return 4;
+        case 0x44: // LD B, H    b1 c4 flags:----
+                   if (cpu_debug) printf("LD B, H\n");
+                   B = H;
+                   PC += 1;
+                   return 4;
+        case 0x45: // LD B, L    b1 c4 flags:----
+                   if (cpu_debug) printf("LD B, L\n");
+                   B = L;
+                   PC += 1;
+                   return 4;
+        case 0x46: // LD B, [HL]    b1 c8 flags:----
+                   if (cpu_debug) printf("LD B, [HL]\n");
+                   B = mem_read8(HL);
+                   PC += 1;
+                   return 8;
+        case 0x47: // LD B, A    b1 c4 flags:----
+                   if (cpu_debug) printf("LD B, A\n");
+                   B = A;
+                   PC += 1;
+                   return 4;
+        case 0x48: // LD C, B    b1 c4 flags:----
+                   if (cpu_debug) printf("LD C, B\n");
+                   C = B;
+                   PC += 1;
+                   return 4;
+        case 0x49: // LD C, C    b1 c4 flags:----
+                   if (cpu_debug) printf("LD C, C\n");
+                   PC += 1;
+                   return 4;
+        case 0x4A: // LD C, D    b1 c4 flags:----
+                   if (cpu_debug) printf("LD C, D\n");
+                   C = D;
+                   PC += 1;
+                   return 4;
+        case 0x4B: // LD C, E    b1 c4 flags:----
+                   if (cpu_debug) printf("LD C, E\n");
+                   C = E;
+                   PC += 1;
+                   return 4;
+        case 0x4C: // LD C, H    b1 c4 flags:----
+                   if (cpu_debug) printf("LD C, H\n");
+                   C = H;
+                   PC += 1;
+                   return 4;
+        case 0x4D: // LD C, L    b1 c4 flags:----
+                   if (cpu_debug) printf("LD C, L\n");
+                   C = L;
+                   PC += 1;
+                   return 4;
+        case 0x4E: // LD C, [HL]    b1 c8 flags:----
+                   if (cpu_debug) printf("LD C, [HL]\n");
+                   C = mem_read8(HL);
+                   PC += 1;
+                   return 8;
+        case 0x4F: // LD C, A    b1 c4 flags:----
+                   if (cpu_debug) printf("LD C, A\n");
+                   C = A;
+                   PC += 1;
+                   return 4;
+        case 0x50: // LD D, B    b1 c4 flags:----
+                   if (cpu_debug) printf("LD D, B\n");
+                   D = B;
+                   PC += 1;
+                   return 4;
+        case 0x51: // LD D, C    b1 c4 flags:----
+                   if (cpu_debug) printf("LD D, C\n");
+                   D = C;
+                   PC += 1;
+                   return 4;
+        case 0x52: // LD D, D    b1 c4 flags:----
+                   if (cpu_debug) printf("LD D, D\n");
+                   PC += 1;
+                   return 4;
+        case 0x53: // LD D, E    b1 c4 flags:----
+                   if (cpu_debug) printf("LD D, E\n");
+                   D = E;
+                   PC += 1;
+                   return 4;
+        case 0x54: // LD D, H    b1 c4 flags:----
+                   if (cpu_debug) printf("LD D, H\n");
+                   D = H;
+                   PC += 1;
+                   return 4;
+        case 0x55: // LD D, L    b1 c4 flags:----
+                   if (cpu_debug) printf("LD D, L\n");
+                   D = L;
+                   PC += 1;
+                   return 4;
+        case 0x56: // LD D, [HL]    b1 c8 flags:----
+                   if (cpu_debug) printf("LD D, [HL]\n");
+                   D = mem_read8(HL);
+                   PC += 1;
+                   return 8;
+        case 0x57: // LD D, A    b1 c4 flags:----
+                   if (cpu_debug) printf("LD D, A\n");
+                   D = A;
+                   PC += 1;
+                   return 4;
+        case 0x58: // LD E, B    b1 c4 flags:----
+                   if (cpu_debug) printf("LD E, B\n");
+                   E = B;
+                   PC += 1;
+                   return 4;
+        case 0x59: // LD E, C    b1 c4 flags:----
+                   if (cpu_debug) printf("LD E, C\n");
+                   E = C;
+                   PC += 1;
+                   return 4;
+        case 0x5A: // LD E, D    b1 c4 flags:----
+                   if (cpu_debug) printf("LD E, D\n");
+                   E = D;
+                   PC += 1;
+                   return 4;
+        case 0x5B: // LD E, E    b1 c4 flags:----
+                   if (cpu_debug) printf("LD E, E\n");
+                   PC += 1;
+                   return 4;
+        case 0x5C: // LD E, H    b1 c4 flags:----
+                   if (cpu_debug) printf("LD E, H\n");
+                   E = H;
+                   PC += 1;
+                   return 4;
+        case 0x5D: // LD E, L    b1 c4 flags:----
+                   if (cpu_debug) printf("LD E, L\n");
+                   E = L;
+                   PC += 1;
+                   return 4;
+        case 0x5E: // LD E, [HL]    b1 c8 flags:----
+                   if (cpu_debug) printf("LD E, [HL]\n");
+                   E = mem_read8(HL);
+                   PC += 1;
+                   return 8;
+        case 0x5F: // LD E, A b1 c4 flags:----
+                   if (cpu_debug) printf("LD E, A\n");
+                   E = A;
+                   PC += 1;
+                   return 4;
+        case 0x60: // LD H, B    b1 c4 flags:----
+                   if (cpu_debug) printf("LD H, B\n");
+                   H = B;
+                   PC += 1;
+                   return 4;
+        case 0x61: // LD H, C    b1 c4 flags:----
+                   if (cpu_debug) printf("LD H, C\n");
+                   H = C;
+                   PC += 1;
+                   return 4;
+        case 0x62: // LD H, D    b1 c4 flags:----
+                   if (cpu_debug) printf("LD H, D\n");
+                   H = D;
+                   PC += 1;
+                   return 4;
+        case 0x63: // LD H, E    b1 c4 flags:----
+                   if (cpu_debug) printf("LD H, E\n");
+                   H = E;
+                   PC += 1;
+                   return 4;
+        case 0x64: // LD H, H    b1 c4 flags:----
+                   if (cpu_debug) printf("LD H, H\n");
+                   PC += 1;
+                   return 4;
+        case 0x65: // LD H, L    b1 c4 flags:----
+                   if (cpu_debug) printf("LD H, L\n");
+                   H = L;
+                   PC += 1;
+                   return 4;
+        case 0x66: // LD H, [HL]    b1 c8 flags:----
+                   if (cpu_debug) printf("LD H, [HL]\n");
+                   H = mem_read8(HL);
+                   PC += 1;
+                   return 8;
+        case 0x67: // LD H, A    b1 c4 flags:----
+                   if (cpu_debug) printf("LD H, A\n");
+                   H = A;
+                   PC += 1;
+                   return 4;
+        case 0x68: // LD L, B    b1 c4 flags:----
+                   if (cpu_debug) printf("LD L, B\n");
+                   L = B;
+                   PC += 1;
+                   return 4;
+        case 0x69: // LD L, C    b1 c4 flags:----
+                   if (cpu_debug) printf("LD L, C\n");
+                   L = C;
+                   PC += 1;
+                   return 4;
+        case 0x6A: // LD L, D    b1 c4 flags:----
+                   if (cpu_debug) printf("LD L, D\n");
+                   L = D;
+                   PC += 1;
+                   return 4;
+        case 0x6B: // LD L, E    b1 c4 flags:----
+                   if (cpu_debug) printf("LD L, E\n");
+                   L = E;
+                   PC += 1;
+                   return 4;
+        case 0x6C: // LD L, H    b1 c4 flags:----
+                   if (cpu_debug) printf("LD L, H\n");
+                   L = H;
+                   PC += 1;
+                   return 4;
+        case 0x6D: // LD L, L    b1 c4 flags:----
+                   if (cpu_debug) printf("LD L, L\n");
+                   PC += 1;
+                   return 4;
+        case 0x6E: // LD L, [HL]    b1 c8 flags:----
+                   if (cpu_debug) printf("LD L, [HL]\n");
+                   L = mem_read8(HL);
+                   PC += 1;
+                   return 8;
+        case 0x6F: // LD L, A  b1 c4 flags:----
+                   if (cpu_debug) printf("LD L, A\n");
+                   L = A;
+                   PC += 1;
+                   return 4;
+        case 0x70: // LD [HL], B    b1 c8 flags:----
+                   if (cpu_debug) printf("LD [HL], B\n");
+                   mem_write8(L | (H << 8), B); 
+                   PC += 1;
+                   return 8;
+        case 0x71: // LD [HL], C    b1 c8 flags:----
+                   if (cpu_debug) printf("LD [HL], C\n");
+                   mem_write8(L | (H << 8), C); 
+                   PC += 1;
+                   return 8;
+        case 0x72: // LD [HL], D    b1 c8 flags:----
+                   if (cpu_debug) printf("LD [HL], D\n");
+                   mem_write8(L | (H << 8), D); 
+                   PC += 1;
+                   return 8;
+        case 0x73: // LD [HL], E   b1 c8 flags:----
+                   if (cpu_debug) printf("LD [HL], E\n");
+                   mem_write8(L | (H << 8), E); 
+                   PC += 1;
+                   return 8;
+        case 0x74: // LD [HL], H   b1 c8 flags:----
+                   if (cpu_debug) printf("LD [HL], H\n");
+                   mem_write8(L | (H << 8), H); 
+                   PC += 1;
+                   return 8;
+        case 0x75: // LD [HL], L   b1 c8 flags:----
+                   if (cpu_debug) printf("LD [HL], L\n");
+                   mem_write8(L | (H << 8), L); 
+                   PC += 1;
+                   return 8;
+        case 0x76: // HALT    b1 c4 flags:----
+                   if (cpu_debug) printf("HALT\n");
+                   if (IME == true) {
+                       halted = true;
+                   } else if ((*IF & *IF) == 0) { 
+                        halted = true;
+                   } else { // TODO: implement hardware bug
+                       halted = false;
+                   }
+                   PC += 1;
+                   return 4;
+        case 0x77: // LD [HL], A    b1 c8 flags:----
+                   if (cpu_debug) printf("LD [HL], A\n");
+                   mem_write8(L | (H << 8), A); 
+                   PC += 1;
+                   return 8;
+        case 0x78: // LD A, B    b1 c4 flags:----
+                   if (cpu_debug) printf("LD A, B\n");
+                   A = B;
+                   PC += 1;
+                   return 4;
+        case 0x79: // LD A, C    b1 c4 flags:----
+                   if (cpu_debug) printf("LD A, C\n");
+                   A = C;
+                   PC += 1;
+                   return 4;
+        case 0x7A: // LD A, D    b1 c4 flags:----
+                   if (cpu_debug) printf("LD A, D\n");
+                   A = D;
+                   PC += 1;
+                   return 4;
+        case 0x7B: // LD A, E    b1 c4 flags:----
+                   if (cpu_debug) printf("LD A, E\n");
+                   A = E;
+                   PC += 1;
+                   return 4;
+        case 0x7C: // LD A, H    b1 c4 flags:----
+                   if (cpu_debug) printf("LD A, H\n");
+                   A = H;
+                   PC += 1;
+                   return 4;
+        case 0x7D: // LD A, L    b1 c4 flags:----
+                   if (cpu_debug) printf("LD A, L\n");
+                   A = L;
+                   PC += 1;
+                   return 4;
+        case 0x7E: // LD A, [HL]    b1 c8 flags:----
+                   if (cpu_debug) printf("LD A, [HL]\n");
+                   A = mem_read8(HL);
+                   PC += 1;
+                   return 8;
+        case 0x7F: // LD A, A    b1 c4 flags:----
+                   if (cpu_debug) printf("LD A, A\n");
+                   PC += 1;
+                   return 4;
+        case 0x80: // ADD A, B    b1 c4 flags:Z0HC
+                   if (cpu_debug) printf("ADD A, B\n");
+                   if (A + B > 0xFF) SETF_C; else CLRF_C;
+                   if ( (A & 0x0F) + (B & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+                   A += B;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   PC += 1;
+                   return 4;
+        case 0x81: // ADD A, C    b1 c4 flags:Z0HC
+                   if (cpu_debug) printf("ADD A, C\n");
+                   if (A + C > 0xFF) SETF_C; else CLRF_C;
+                   if ( (A & 0x0F) + (C & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+                   A += C;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   PC += 1;
+                   return 4;
+        case 0x82: // ADD A, D    b1 c4 flags:Z0HC
+                   if (cpu_debug) printf("ADD A, D\n");
+                   if (A + D > 0xFF) SETF_C; else CLRF_C;
+                   if ( (A & 0x0F) + (D & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+                   A += D;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   PC += 1;
+                   return 4;
+        case 0x83: // ADD A, E    b1 c4 flags:Z0HC
+                   if (cpu_debug) printf("ADD A, E\n");
+                   if (A + E > 0xFF) SETF_C; else CLRF_C;
+                   if ( (A & 0x0F) + (E & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+                   A += E;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   PC += 1;
+                   return 4;
+        case 0x84: // ADD A, H    b1 c4 flags:Z0HC
+                   if (cpu_debug) printf("ADD A, H\n");
+                   if (A + H > 0xFF) SETF_C; else CLRF_C;
+                   if ( (A & 0x0F) + (H & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+                   A += H;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   PC += 1;
+                   return 4;
+        case 0x85: // ADD A, L    b1 c4 flags:Z0HC
+                   if (cpu_debug) printf("ADD A, L\n");
+                   if (A + L > 0xFF) SETF_C; else CLRF_C;
+                   if ( (A & 0x0F) + (L & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+                   A += L;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   PC += 1;
+                   return 4;
+        case 0x86: // ADD A, [HL]    b1 c8 flags:Z0HC
+                   n8 = mem_read8(HL);
+                   if (cpu_debug) printf("ADD A, [HL]\n");
+                   if (A + n8 > 0xFF) SETF_C; else CLRF_C;
+                   if ( (A & 0x0F) + (n8 & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+                   A += n8;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   PC += 1;
+                   return 8;
+        case 0x87: // ADD A, A    b1 c4 flags:Z0HC
+                   if (cpu_debug) printf("ADD A, A\n");
+                   if (A + A > 0xFF) SETF_C; else CLRF_C;
+                   if ( (A & 0x0F) + (A & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+                   A += A;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   PC += 1;
+                   return 4;
+        case 0x88: { // ADC A, B    b1 c4 flags:Z0HC
+                       if (cpu_debug) printf("ADC A, B\n");
+                       uint8_t carry = READF_C;
+                       uint16_t result = A + B + carry;
+                       if (((A & 0x0F) + (B & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+                       if (result > 0xFF) SETF_C; else CLRF_C;
+                       A = (uint8_t)result;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       CLRF_N;
+                       PC += 1;
+                       return 4;
+                   }
+        case 0x89: { // ADC A, C    b1 c4 flags:Z0HC
+                       if (cpu_debug) printf("ADC A, C\n");
+                       uint8_t carry = READF_C;
+                       uint16_t result = A + C + carry;
+                       if (((A & 0x0F) + (C & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+                       if (result > 0xFF) SETF_C; else CLRF_C;
+                       A = (uint8_t)result;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       CLRF_N;
+                       PC += 1;
+                       return 4;
+                   }
+        case 0x8A: { // ADC A, D    b1 c4 flags:Z0HC
+                       if (cpu_debug) printf("ADC A, D\n");
+                       uint8_t carry = READF_C;
+                       uint16_t result = A + D + carry;
+                       if (((A & 0x0F) + (D & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+                       if (result > 0xFF) SETF_C; else CLRF_C;
+                       A = (uint8_t)result;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       CLRF_N;
+                       PC += 1;
+                       return 4;
+                   }
+        case 0x8B: { // ADC A, E    b1 c4 flags:Z0HC
+                       if (cpu_debug) printf("ADC A, E\n");
+                       uint8_t carry = READF_C;
+                       uint16_t result = A + E + carry;
+                       if (((A & 0x0F) + (E & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+                       if (result > 0xFF) SETF_C; else CLRF_C;
+                       A = (uint8_t)result;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       CLRF_N;
+                       PC += 1;
+                       return 4;
+                   }
+        case 0x8C: { // ADC A, H    b1 c4 flags:Z0HC
+                       if (cpu_debug) printf("ADC A, H\n");
+                       uint8_t carry = READF_C;
+                       uint16_t result = A + H + carry;
+                       if (((A & 0x0F) + (H & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+                       if (result > 0xFF) SETF_C; else CLRF_C;
+                       A = (uint8_t)result;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       CLRF_N;
+                       PC += 1;
+                       return 4;
+                   }
+        case 0x8D: { // ADC A, L    b1 c4 flags:Z0HC
+                       if (cpu_debug) printf("ADC A, L\n");
+                       uint8_t carry = READF_C;
+                       uint16_t result = A + L + carry;
+                       if (((A & 0x0F) + (L & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+                       if (result > 0xFF) SETF_C; else CLRF_C;
+                       A = (uint8_t)result;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       CLRF_N;
+                       PC += 1;
+                       return 4;
+                   }
+        case 0x8E: { // ADC A, [HL]    b1 c8 flags:Z0HC
+                       n8 = mem_read8(HL);
+                       if (cpu_debug) printf("ADC A, [HL]");
+                       uint8_t carry = (READF_C) ? 1 : 0;
+                       uint16_t result = A + n8 + carry;
+                       if (((A & 0x0F) + (n8 & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+                       if (result > 0xFF) SETF_C; else CLRF_C;
+                       A = (uint8_t)result;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       CLRF_N;
+                       PC += 1;
+                       return 8;
+                   }
+        case 0x8F: { // ADC A, A    b1 c4 flags:Z0HC
+                       if (cpu_debug) printf("ADC A, A\n");
+                       uint8_t carry = READF_C;
+                       uint16_t result = A + A + carry;
+                       if (((A & 0x0F) + (A & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+                       if (result > 0xFF) SETF_C; else CLRF_C;
+                       A = (uint8_t)result;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       CLRF_N;
+                       PC += 1;
+                       return 4;
+                   }
+        case 0x90: // SUB A, B    b1 c4 flags:Z1HC
+                   if (cpu_debug) printf("SUB A, B\n");
+                   if (B > A) SETF_C; else CLRF_C;
+                   if ((B & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+                   SETF_N;
+                   A -= B;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   PC += 1;
+                   return 4;
+        case 0x91: // SUB A, C    b1 c4 flags:Z1HC
+                   if (cpu_debug) printf("SUB A, C\n");
+                   if (C > A) SETF_C; else CLRF_C;
+                   if ((C & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+                   SETF_N;
+                   A -= C;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   PC += 1;
+                   return 4;
+        case 0x92: // SUB A, D    b1 c4 flags:Z1HC
+                   if (cpu_debug) printf("SUB A, D\n");
+                   if (D > A) SETF_C; else CLRF_C;
+                   if ((D & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+                   SETF_N;
+                   A -= D;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   PC += 1;
+                   return 4;
+        case 0x93: // SUB A, E    b1 c4 flags:Z1HC
+                   if (cpu_debug) printf("SUB A, E\n");
+                   if (E > A) SETF_C; else CLRF_C;
+                   if ((E & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+                   SETF_N;
+                   A -= E;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   PC += 1;
+                   return 4;
+        case 0x94: // SUB A, H    b1 c4 flags:Z1HC
+                   if (cpu_debug) printf("SUB A, H\n");
+                   if (H > A) SETF_C; else CLRF_C;
+                   if ((H & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+                   SETF_N;
+                   A -= H;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   PC += 1;
+                   return 4;
+        case 0x95: // SUB A, L    b1 c4 flags:Z1HC
+                   if (cpu_debug) printf("SUB A, L\n");
+                   if (L > A) SETF_C; else CLRF_C;
+                   if ((L & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+                   SETF_N;
+                   A -= L;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   PC += 1;
+                   return 4;
+        case 0x96: // SUB A, [HL]    b1 c8 flags:Z1HC
+                   n8 = mem_read8(HL);
+                   if (cpu_debug) printf("SUB A, [HL]\n");
+                   if (n8 > A) SETF_C; else CLRF_C;
+                   if ((n8 & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+                   SETF_N;
+                   A -= n8;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   PC += 1;
+                   return 8;
+        case 0x97: // SUB A, A    b1 c4 flags:1100
+                   if (cpu_debug) printf("SUB A, A\n");
+                   SETF_Z; SETF_N; CLRF_H; CLRF_C;
+                   A -= A;
+                   PC += 1;
+                   return 4;
+        case 0x98: // SBC A, B    b1 c4 flags:Z1HC
+                   {
+                       if (cpu_debug) printf("SBC A, B\n");
+                       uint8_t carry = READF_C;
+                       if (B + carry > A) SETF_C; else CLRF_C;
+                       if ((B & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+                       A = A - B - carry;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       SETF_N;
+                       PC += 1;
+                   }
+                   return 4;
+        case 0x99: // SBC A, C    b1 c4 flags:Z1HC
+                   {
+                       if (cpu_debug) printf("SBC A, C\n");
+                       uint8_t carry = READF_C;
+                       if (C + carry > A) SETF_C; else CLRF_C;
+                       if ((C & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+                       A = A - C - carry;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       SETF_N;
+                       PC += 1;
+                   }
+                   return 4;
+        case 0x9A: // SBC A, D    b1 c4 flags:Z1HC
+                   {
+                       if (cpu_debug) printf("SBC A, D\n");
+                       uint8_t carry = READF_C;
+                       if (D + carry > A) SETF_C; else CLRF_C;
+                       if ((D & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+                       A = A - D - carry;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       SETF_N;
+                       PC += 1;
+                   }
+                   return 4;
+        case 0x9B: // SBC A, E    b1 c4 flags:Z1HC
+                   {
+                       if (cpu_debug) printf("SBC A, E\n");
+                       uint8_t carry = READF_C;
+                       if (E + carry > A) SETF_C; else CLRF_C;
+                       if ((E & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+                       A = A - E - carry;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       SETF_N;
+                       PC += 1;
+                   }
+                   return 4;
+        case 0x9C: // SBC A, H    b1 c4 flags:Z1HC
+                   {
+                       if (cpu_debug) printf("SBC A, H\n");
+                       uint8_t carry = READF_C;
+                       if (H + carry > A) SETF_C; else CLRF_C;
+                       if ((H & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+                       A = A - H - carry;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       SETF_N;
+                       PC += 1;
+                   }
+                   return 4;
+        case 0x9D: // SBC A, L    b1 c4 flags:Z1HC
+                   {
+                       if (cpu_debug) printf("SBC A, L\n");
+                       uint8_t carry = READF_C;
+                       if (L + carry > A) SETF_C; else CLRF_C;
+                       if ((L & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+                       A = A - L - carry;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       SETF_N;
+                       PC += 1;
+                   }
+                   return 4;
+        case 0x9E: // SBC A, [HL]    b1 c8 flags:Z1HC
+                   n8 = mem_read8(HL);
+                   if (cpu_debug) printf("SBC A, [HL]\n");
+                   uint8_t carry = READF_C ? 1 : 0;
+                   if (n8 + carry > A) SETF_C; else CLRF_C;
+                   if ((n8 & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+                   A = A - n8 - carry;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   SETF_N;
+                   PC += 1;
+                   return 8;
+        case 0x9F: // SBC A, A    b1 c4 flags:Z1H-
+                   {
+                       if (cpu_debug) printf("SBC A, A\n");
+                       uint8_t carry = READF_C;
+                       if ((A & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+                       A = A - A - carry;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       SETF_N;
+                       PC += 1;
+                   }
+                   return 4;
+        case 0xA0: // AND A, B    b1 c4 flags:Z010
+                   if (cpu_debug) printf("AND A, B\n");
+                   A = A & B;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; SETF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xA1: // AND A, C    b1 c4 flags:Z010
+                   if (cpu_debug) printf("AND A, C\n");
+                   A = A & C;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; SETF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xA2: // AND A, D    b1 c4 flags:Z010
+                   if (cpu_debug) printf("AND A, D\n");
+                   A = A & D;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; SETF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xA3: // AND A, E    b1 c4 flags:Z010
+                   if (cpu_debug) printf("AND A, E\n");
+                   A = A & E;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; SETF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xA4: // AND A, H    b1 c4 flags:Z010
+                   if (cpu_debug) printf("AND A, H\n");
+                   A = A & H;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; SETF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xA5: // AND A, L    b1 c4 flags:Z010
+                   if (cpu_debug) printf("AND A, L\n");
+                   A = A & L;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; SETF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xA6: // AND A, [HL]    b1 c8 flags:Z010
+                   n8 = mem_read8(HL);
+                   if (cpu_debug) printf("AND A, [HL]\n");
+                   A = A & n8;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; SETF_H; CLRF_C;
+                   PC += 1;
+                   return 8;
+        case 0xA7: // AND A, A    b1 c4 flags:Z010
+                   if (cpu_debug) printf("AND A, A\n");
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; SETF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xA8: // XOR A, B    b1 c4 flags:Z000
+                   if (cpu_debug) printf("XOR A, B\n");
+                   A = A ^ B;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xA9: // XOR A, C    b1 c4 flags:Z000
+                   if (cpu_debug) printf("XOR A, C\n");
+                   A = A ^ C;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xAA: // XOR A, D    b1 c4 flags:Z000
+                   if (cpu_debug) printf("XOR A, D\n");
+                   A = A ^ D;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xAB: // XOR A, E    b1 c4 flags:Z000
+                   if (cpu_debug) printf("XOR A, E\n");
+                   A = A ^ E;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xAC: // XOR A, H    b1 c4 flags:Z000
+                   if (cpu_debug) printf("XOR A, H\n");
+                   A = A ^ H;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xAD: // XOR A, L    b1 c4 flags:Z000
+                   if (cpu_debug) printf("XOR A, L\n");
+                   A = A ^ L;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xAE: // XOR A, [HL]    b1 c8 flags:Z000
+                   if (cpu_debug) printf("XOR A, [HL]\n");
+                   A = A ^ mem_read8(HL);
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 8;
+        case 0xAF: // XOR A, A    b1 c4 flags:1000
+                   A = 0;
+                   SETF_Z;
+                   CLRF_N;
+                   CLRF_H;
+                   CLRF_C;
+                   if (cpu_debug) printf("XOR A, A\n");
+                   PC += 1;
+                   return 4;
+        case 0xB0: // OR A, B   b1 c4 flags:Z000
+                   if (cpu_debug) printf("OR A, B\n");
+                   A = A | B;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xB1: // OR A, C    b1 c4 flags:Z000
+                   if (cpu_debug) printf("OR A, C\n");
+                   A = A | C;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   CLRF_H;
+                   CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xB2: // OR A, D   b1 c4 flags:Z000
+                   if (cpu_debug) printf("OR A, D\n");
+                   A = A | D;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xB3: // OR A, E   b1 c4 flags:Z000
+                   if (cpu_debug) printf("OR A, E\n");
+                   A = A | E;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xB4: // OR A, H   b1 c4 flags:Z000
+                   if (cpu_debug) printf("OR A, H\n");
+                   A = A | H;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xB5: // OR A, L   b1 c4 flags:Z000
+                   if (cpu_debug) printf("OR A, L\n");
+                   A = A | L;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xB6: // OR A, [HL]    b1 c8 flags:Z000
+                   if (cpu_debug) printf("OR A, [HL]\n");
+                   A = A | mem_read8(HL);
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 8;
+        case 0xB7: // OR A, A    b1 c4 flags:Z000
+                   if (cpu_debug) printf("OR A, A\n");
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xB8: // CP A, B    b1 c4 flags:Z1HC
+                   if (cpu_debug) printf("CP A, B\n");
+                   if (A == B) SETF_Z; else CLRF_Z;
+                   SETF_N;
+                   if ((A & 0x0F) < (B & 0x0F)) SETF_H; else CLRF_H;
+                   if (A < B) SETF_C; else CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xB9: // CP A, C    b1 c4 flags:Z1HC
+                   if (cpu_debug) printf("CP A, C\n");
+                   if (A == C) SETF_Z; else CLRF_Z;
+                   SETF_N;
+                   if ((A & 0x0F) < (C & 0x0F)) SETF_H; else CLRF_H;
+                   if (A < C) SETF_C; else CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xBA: // CP A, D    b1 c4 flags:Z1HC
+                   if (cpu_debug) printf("CP A, D\n");
+                   if (A == D) SETF_Z; else CLRF_Z;
+                   SETF_N;
+                   if ((A & 0x0F) < (D & 0x0F)) SETF_H; else CLRF_H;
+                   if (A < D) SETF_C; else CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xBB: // CP A, E    b1 c4 flags:Z1HC
+                   if (cpu_debug) printf("CP A, E\n");
+                   if (A == E) SETF_Z; else CLRF_Z;
+                   SETF_N;
+                   if ((A & 0x0F) < (E & 0x0F)) SETF_H; else CLRF_H;
+                   if (A < E) SETF_C; else CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xBC: // CP A, H    b1 c4 flags:Z1HC
+                   if (cpu_debug) printf("CP A, H\n");
+                   if (A == H) SETF_Z; else CLRF_Z;
+                   SETF_N;
+                   if ((A & 0x0F) < (H & 0x0F)) SETF_H; else CLRF_H;
+                   if (A < H) SETF_C; else CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xBD: // CP A, L    b1 c4 flags:Z1HC
+                   if (cpu_debug) printf("CP A, L\n");
+                   if (A == L) SETF_Z; else CLRF_Z;
+                   SETF_N;
+                   if ((A & 0x0F) < (L & 0x0F)) SETF_H; else CLRF_H;
+                   if (A < L) SETF_C; else CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xBE: // CP A, [HL]    b1 c8 flags:Z1HC
+                   n8 = mem_read8(HL);
+                   if (cpu_debug) printf("CP A, [HL]\n");
+                   if (n8 == A) SETF_Z; else CLRF_Z;
+                   SETF_N;
+                   if ((n8 & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+                   if (n8 > A) SETF_C; else CLRF_C;
+                   PC += 1;
+                   return 8;
+        case 0xBF: // CP A, A    b1 c4 flags:1100
+                   if (cpu_debug) printf("CP A, A\n");
+                   SETF_Z; SETF_N;
+                   CLRF_H; CLRF_C;
+                   PC += 1;
+                   return 4;
+        case 0xC0: // RET NZ b1 c20, 8 flags:----
+                   if (cpu_debug) printf("RET NZ\n");
+                   if (!READF_Z) {
+                       uint8_t low5 = mem_read8(SP);
+                       uint8_t high5 = mem_read8(SP + 1);
+                       SP += 2;
+                       PC = (high5 << 8) | low5;
+                       return 20;
+                   }
+                   PC += 1;
+                   return 8;
+        case 0xC1: // POP BC    b1 c12 flags:----
+                   if (cpu_debug) printf("POP BC\n");
+                   C = mem_read8(SP);
+                   B = mem_read8(SP + 1);
+                   SP += 2;
+                   PC += 1;
+                   return 12;
+        case 0xC2: // JP NZ <a16>    b3 c16,12 flags:----
+                   a16 = mem_read8(PC + 1) | (mem_read8(PC + 2) << 8); 
+                   if (cpu_debug) printf("JP NZ 0x%04X\n", a16);
+                   if (!READF_Z) {
+                       PC = a16;
+                       return 16;
+                   }
+                   PC += 3;
+                   return 12;
+        case 0xC3: // JP <a16>    b3 c16 flags:----
+                   a16 = mem_read8(PC + 1) | (mem_read8(PC + 2) << 8); 
+                   if (cpu_debug) printf("JP 0x%04X\n", a16);
+                   PC = a16; 
+                   return 16;
+        case 0xC4: // CALL NZ, <a16>    b3 c24,12 flags:----
+                   a16 = mem_read8(PC + 1) | (mem_read8(PC + 2) << 8); 
+                   if (cpu_debug) printf("CALL NZ, 0x%04X\n", a16);
+                   if (!READF_Z) {
+                       SP -= 2;
+                       mem_write16(SP, PC + 3);
+                       PC = a16;
+                       return 24;
+                   }
+                   PC += 3;
+                   return 12;
+        case 0xC5: // PUSH BC b1 c16 flags:----
+                   if (cpu_debug) printf("PUSH BC\n");
+                   SP -= 2;
+                   mem_write16(SP, BC);
+                   PC += 1;
+                   return 16;
+        case 0xC6: // ADD A, <n8>    b2 c8 flags:Z0HC
+                   n8 = mem_read8(PC + 1);
+                   if (cpu_debug) printf("ADD A, 0x%02X\n", n8);
+                   if (A + n8 > 0xFF) SETF_C; else CLRF_C;
+                   if ( (A & 0x0F) + (n8 & 0x0F) > 0x0F ) SETF_H; else CLRF_H;
+                   A += n8;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N;
+                   PC += 2;
+                   return 8;
+        case 0xC7: // RST $00    b1 c16 flags:----
+                   if (cpu_debug) printf("RST $00\n");
+                   SP -= 2;
+                   mem_write16(SP, PC + 1); 
+                   PC = 0x0000;
+                   return 16;
+        case 0xC8: // RET Z b1 c20, 8 flags:----
+                   if (cpu_debug) printf("RET Z\n");
+                   if (READF_Z) {
+                       uint8_t low5 = mem_read8(SP);
+                       uint8_t high5 = mem_read8(SP + 1);
+                       SP += 2;
+                       PC = (high5 << 8) | low5;
+                       return 20;
+                   }
+                   PC += 1;
+                   return 8;
+        case 0xC9: // RET b1 c16 flags:----
+                   if (cpu_debug) printf("RET \n");
+                   {}
+                   uint8_t low = mem_read8(SP);
+                   uint8_t high = mem_read8(SP + 1);
+                   SP += 2;
+                   PC= (high << 8) | low;
+                   return 16;
+        case 0xCA: // JP Z <a16>    b3 c16,12 flags:----
+                   a16 = mem_read8(PC + 1) | (mem_read8(PC + 2) << 8); 
+                   if (cpu_debug) printf("JP Z 0x%04X\n", a16);
+                   if (READF_Z) {
+                       PC = a16;
+                       return 16;
+                   }
+                   PC += 3;
+                   return 12;
+        case 0xCB: { // PREFIX b1 c4 flags:----
+                       uint8_t cb_op = mem_read8(PC + 1);
+                       if (cpu_debug) printf("CB %02X: ", cb_op);
+
+                       uint8_t *reg;
+                       uint8_t hl_val;
+                       int cycles = 8;
+
+                       switch (cb_op & 0x07) {
+                           case 0: reg = &B; break;
+                           case 1: reg = &C; break;
+                           case 2: reg = &D; break;
+                           case 3: reg = &E; break;
+                           case 4: reg = &H; break;
+                           case 5: reg = &L; break;
+                           case 6: hl_val = mem_read8(HL); reg = &hl_val; cycles = 16; break;
+                           case 7: reg = &A; break;
+                       }
+
+                       uint8_t op_type = cb_op >> 3;
+
+                       if (op_type < 8) {
+                           // Rotates and shifts (0x00-0x3F)
+                           switch (op_type) {
+                               case 0: // RLC
+                                   if (cpu_debug) printf("RLC\n");
+                                   if (*reg & 0x80) SETF_C; else CLRF_C;
+                                   *reg = (*reg << 1) | (*reg >> 7);
+                                   if (*reg == 0) SETF_Z; else CLRF_Z;
+                                   CLRF_N; CLRF_H;
+                                   break;
+                               case 1: // RRC
+                                   if (cpu_debug) printf("RRC\n");
+                                   if (*reg & 0x01) SETF_C; else CLRF_C;
+                                   *reg = (*reg >> 1) | (*reg << 7);
+                                   if (*reg == 0) SETF_Z; else CLRF_Z;
+                                   CLRF_N; CLRF_H;
+                                   break;
+                               case 2: // RL
+                                   if (cpu_debug) printf("RL\n");
+                                   {
+                                       uint8_t old_carry = (READF_C) ? 1 : 0;
+                                       if (*reg & 0x80) SETF_C; else CLRF_C;
+                                       *reg = (*reg << 1) | old_carry;
+                                   }
+                                   if (*reg == 0) SETF_Z; else CLRF_Z;
+                                   CLRF_N; CLRF_H;
+                                   break;
+                               case 3: // RR
+                                   if (cpu_debug) printf("RR\n");
+                                   {
+                                       uint8_t old_carry = (READF_C) ? 0x80 : 0;
+                                       if (*reg & 0x01) SETF_C; else CLRF_C;
+                                       *reg = (*reg >> 1) | old_carry;
+                                   }
+                                   if (*reg == 0) SETF_Z; else CLRF_Z;
+                                   CLRF_N; CLRF_H;
+                                   break;
+                               case 4: // SLA
+                                   if (cpu_debug) printf("SLA\n");
+                                   if (*reg & 0x80) SETF_C; else CLRF_C;
+                                   *reg = *reg << 1;
+                                   if (*reg == 0) SETF_Z; else CLRF_Z;
+                                   CLRF_N; CLRF_H;
+                                   break;
+                               case 5: // SRA
+                                   if (cpu_debug) printf("SRA\n");
+                                   if (*reg & 0x01) SETF_C; else CLRF_C;
+                                   *reg = (*reg >> 1) | (*reg & 0x80); // preserve bit 7
+                                   if (*reg == 0) SETF_Z; else CLRF_Z;
+                                   CLRF_N; CLRF_H;
+                                   break;
+                               case 6: // SWAP
+                                   if (cpu_debug) printf("SWAP\n");
+                                   *reg = ((*reg & 0x0F) << 4) | ((*reg & 0xF0) >> 4);
+                                   if (*reg == 0) SETF_Z; else CLRF_Z;
+                                   CLRF_N; CLRF_H; CLRF_C;
+                                   break;
+                               case 7: // SRL
+                                   if (cpu_debug) printf("SRL\n");
+                                   if (*reg & 0x01) SETF_C; else CLRF_C;
+                                   *reg = *reg >> 1;
+                                   if (*reg == 0) SETF_Z; else CLRF_Z;
+                                   CLRF_N; CLRF_H;
+                                   break;
+                           }
+                       } else if (op_type < 16) {
+                           // BIT (0x40-0x7F)
+                           uint8_t bit = op_type - 8;
+                           if (cpu_debug) printf("BIT %d\n", bit);
+                           if ((*reg & (1 << bit)) == 0) SETF_Z; else CLRF_Z;
+                           CLRF_N;
+                           SETF_H;
+                           if ((cb_op & 0x07) == 6) cycles = 12; // BIT b,[HL] is 12 cycles
+                       } else if (op_type < 24) {
+                           // RES (0x80-0xBF)
+                           uint8_t bit = op_type - 16;
+                           if (cpu_debug) printf("RES %d\n", bit);
+                           *reg &= ~(1 << bit);
+                       } else {
+                           // SET (0xC0-0xFF)
+                           uint8_t bit = op_type - 24;
+                           if (cpu_debug) printf("SET %d\n", bit);
+                           *reg |= (1 << bit);
+                       }
+
+                       // Write back to [HL] if needed
+                       if ((cb_op & 0x07) == 6 && op_type != 8 && op_type != 9 && op_type != 10 &&
+                               op_type != 11 && op_type != 12 && op_type != 13 && op_type != 14 && op_type != 15) {
+                           // Not a BIT instruction, write back
+                           mem_write8(HL, hl_val);
+                       }
+
+                       PC += 2;
+                       return cycles;
+                   }
+        case 0xCC: // CALL Z, <a16>    b3 c24,12 flags:----
+                   a16 = mem_read8(PC + 1) | (mem_read8(PC + 2) << 8); 
+                   if (cpu_debug) printf("CALL Z, 0x%04X\n", a16);
+                   if (READF_Z) {
+                       SP -= 2;
+                       mem_write16(SP, PC + 3);
+                       PC = a16;
+                       return 24;
+                   }
+                   PC += 3;
+                   return 12;
+        case 0xCD: // CALL <a16>    b3 c24 flags:----
+                   a16 = mem_read8(PC + 1) | (mem_read8(PC + 2) << 8); 
+                   if (cpu_debug) printf("CALL 0x%04X\n", a16);
+                   SP -= 2;
+                   mem_write16(SP, PC + 3);
+                   PC = a16;
+                   return 24;
+        case 0xCE: { // ADC A, <n8>    b2 c8 flags:Z0HC
+                       n8 = mem_read8(PC + 1);
+                       if (cpu_debug) printf("ADC A, 0x%02X\n", n8);
+                       uint8_t carry = (READF_C) ? 1 : 0;
+                       uint16_t result = A + n8 + carry;
+                       if (((A & 0x0F) + (n8 & 0x0F) + carry) > 0x0F) SETF_H; else CLRF_H;
+                       if (result > 0xFF) SETF_C; else CLRF_C;
+                       A = (uint8_t)result;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       CLRF_N;
+                       PC += 2;
+                       return 8;
+                   }
+        case 0xCF: // RST $08    b1 c16 flags:----
+                   if (cpu_debug) printf("RST $08\n");
+                   SP -= 2;
+                   mem_write16(SP, PC + 1); 
+                   PC = 0x0008;
+                   return 16;
+        case 0xD0: // RET NC    b1 c20, 8 flags:----
+                   if (cpu_debug) printf("RET NC\n");
+                   if (!READF_C) {
+                       uint8_t low4 = mem_read8(SP);
+                       uint8_t high4 = mem_read8(SP + 1);
+                       SP += 2;
+                       PC = (high4 << 8) | low4;
+                       return 20;
+                   }
+                   PC += 1;
+                   return 8;
+        case 0xD1: // POP DE    b1 c12 flags:----
+                   if (cpu_debug) printf("POP DE\n");
+                   E = mem_read8(SP);
+                   D = mem_read8(SP + 1);
+                   SP += 2;
+                   PC += 1;
+                   return 12;
+        case 0xD2: // JP NC <a16>    b3 c16,12 flags:----
+                   a16 = mem_read8(PC + 1) | (mem_read8(PC + 2) << 8); 
+                   if (cpu_debug) printf("JP NC 0x%04X\n", a16);
+                   if (!READF_C) {
+                       PC = a16;
+                       return 16;
+                   }
+                   PC += 3;
+                   return 12;
+        case 0xD4: // CALL NC, <a16>    b3 c24,12 flags:----
+                   a16 = mem_read8(PC + 1) | (mem_read8(PC + 2) << 8); 
+                   if (cpu_debug) printf("CALL NC, 0x%04X\n", a16);
+                   if (!READF_C) {
+                       SP -= 2;
+                       mem_write16(SP, PC + 3);
+                       PC = a16;
+                       return 24;
+                   }
+                   PC += 3;
+                   return 12;
+        case 0xD5: // PUSH DE    b1 c16 flags:----
+                   if (cpu_debug) printf("PUSH DE\n");
+                   SP -= 2;
+                   mem_write16(SP, DE);
+                   PC += 1;
+                   return 16;
+        case 0xD6: // SUB A, <n8>    b2 c8 flags:Z1HC
+                   n8 = mem_read8(PC + 1);
+                   if (cpu_debug) printf("SUB A, 0x%02X\n", n8);
+                   if (n8 > A) SETF_C; else CLRF_C;
+                   if ((n8 & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+                   SETF_N;
+                   A -= n8;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   PC += 2;
+                   return 8;
+        case 0xD7: // RST $10    b1 c16 flags:----
+                   if (cpu_debug) printf("RST $10\n");
+                   SP -= 2;
+                   mem_write16(SP, PC + 1); 
+                   PC = 0x0010;
+                   return 16;
+        case 0xD8: // RET C    b1 c20, 8 flags:----
+                   if (cpu_debug) printf("RET C\n");
+                   if (READF_C) {
+                       uint8_t low5 = mem_read8(SP);
+                       uint8_t high5 = mem_read8(SP + 1);
+                       SP += 2;
+                       PC = (high5 << 8) | low5;
+                       return 20;
+                   }
+                   PC += 1;
+                   return 8;
+        case 0xD9: // RETI    b1 c16 flags:----
+                   if (cpu_debug) printf("RETI \n");
+                   {
+                       uint8_t low = mem_read8(SP);
+                       uint8_t high = mem_read8(SP + 1);
+                       ime_scheduled = true;
+                       SP += 2;
+                       PC = (high << 8) | low;
+                   }
+                   return 16;
+        case 0xDA: // JP C <a16>    b3 c16,12 flags:----
+                   a16 = mem_read8(PC + 1) | (mem_read8(PC + 2) << 8); 
+                   if (cpu_debug) printf("JP C 0x%04X\n", a16);
+                   if (READF_C) {
+                       PC = a16;
+                       return 16;
+                   }
+                   PC += 3;
+                   return 12;
+        case 0xDC: // CALL C, <a16>    b3 c24,12 flags:----
+                   a16 = mem_read8(PC + 1) | (mem_read8(PC + 2) << 8); 
+                   if (cpu_debug) printf("CALL C, 0x%04X\n", a16);
+                   if (READF_C) {
+                       SP -= 2;
+                       mem_write16(SP, PC + 3);
+                       PC = a16;
+                       return 24;
+                   }
+                   PC += 3;
+                   return 12;
+        case 0xDE: // SBC A, <n8>    b2 c8 flags:Z1HC
+                   n8 = mem_read8(PC + 1);
+                   {
+                       if (cpu_debug) printf("SBC A, 0x%02X\n", n8);
+                       uint8_t carry = READF_C ? 1 : 0;
+                       if (n8 + carry > A) SETF_C; else CLRF_C;
+                       if ((n8 & 0x0F) + carry > (A & 0x0F)) SETF_H; else CLRF_H;
+                       A = A - n8 - carry;
+                       if (A == 0) SETF_Z; else CLRF_Z;
+                       SETF_N;
+                       PC += 2;
+                   }
+                   return 8;
+        case 0xDF: // RST $18    b1 c16 flags:----
+                   if (cpu_debug) printf("RST $18\n");
+                   SP -= 2;
+                   mem_write16(SP, PC + 1); 
+                   PC = 0x0018;
+                   return 16;
+        case 0xE0: // LDH <a8>, A    b2 c12 flags:----
+                   a8 = mem_read8(PC + 1);
+                   uint16_t addr = 0xFF00 + a8;
+                   if (cpu_debug) printf("LDH 0x%04X, A\n", addr);
+                   mem_write8(addr, A);
+                   PC += 2;
+                   return 12;
+        case 0xE1: // POP HL    b1 c12 flags:----
+                   {}
+                   if (cpu_debug) printf("POP HL\n");
+                   uint8_t low1 = mem_read8(SP);
+                   uint8_t high1 = mem_read8(SP + 1);
+                   SP += 2;
+                   L = low1;
+                   H = high1;
+                   PC += 1;
+                   return 12;
+        case 0xE2: // LDH [C], A  b1 c8 flags:----
+                   if (cpu_debug) printf("LDH [C], A\n");
+                   mem_write8(0xFF00 + C, A);
+                   PC += 1;
+                   return 8;
+        case 0xE5: // PUSH HL    b1 c16 flags:----
+                   if (cpu_debug) printf("PUSH HL\n");
+                   SP -= 2;
+                   mem_write16(SP, HL);
+                   PC += 1;
+                   return 16;
+        case 0xE6: // AND A, <n8>    b2 c8 flags:Z010
+                   n8 = mem_read8(PC + 1);
+                   if (cpu_debug) printf("AND A, 0x%02X\n", n8);
+                   A = A & n8;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; SETF_H; CLRF_C;
+                   PC += 2;
+                   return 8;
+        case 0xE7: // RST $20    b1 c16 flags:----
+                   if (cpu_debug) printf("RST $20\n");
+                   SP -= 2;
+                   mem_write16(SP, PC + 1); 
+                   PC = 0x0020;
+                   return 16;
+        case 0xE8: // ADD SP, <e8>    b2 c16 flags=00HC
+                   e8 = (int8_t)mem_read8(PC + 1);
+                   if (cpu_debug) printf("ADD SP, 0x%02X\n", e8);
+                   {
+                       uint16_t result = SP + e8;
+                       uint8_t unsigned_e8 = (uint8_t)mem_read8(PC + 1);  // Use unsigned for flag calc
+
+                       if (((SP & 0x0F) + (unsigned_e8 & 0x0F)) > 0x0F) SETF_H; else CLRF_H;
+                       if (((SP & 0xFF) + unsigned_e8) > 0xFF) SETF_C; else CLRF_C;
+
+                       CLRF_Z;
+                       CLRF_N;
+
+                       SP = result;
+                   }
+                   PC += 2;
+                   return 16;
+        case 0xE9: // JP HL    b1 c4 flags:----
+                   if (cpu_debug) printf("JP HL\n");
+                   PC = HL;
+                   return 4;
+        case 0xEA: // LD [a16], A    b3 c16 flags:----
+                   a16 = mem_read8(PC + 1) | (mem_read8(PC + 2) << 8);
+                   if (cpu_debug) printf("LD 0x%04X, A\n", a16);
+                   mem_write8(a16, A);
+                   PC += 3;
+                   return 16;
+        case 0xEE: // XOR A, <n8>    b2 c8 flags:Z000
+                   n8 = mem_read8(PC + 1);
+                   if (cpu_debug) printf("XOR A, 0x%02X\n", n8);
+                   A = A ^ n8;
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 2;
+                   return 8;
+        case 0xEF: // RST $28    b1 c16 flags:----
+                   if (cpu_debug) printf("RST $28\n");
+                   SP -= 2;
+                   mem_write16(SP, PC + 1); 
+                   PC = 0x0028;
+                   return 16;
+
+        case 0xF0: // LDH A, <a8>
+                   a8 = mem_read8(PC + 1);
+
+                   //if (a8 == 0x00) {
+                   //Joypad register handling
+                   //} else {
+                   A = mem_read8(0xFF00 + a8);
+                   //}
+
+                   if (cpu_debug) printf("LDH A, 0x%02X\n", a8);
+
+                   PC += 2;
+                   return 12;
+        case 0xF1: // POP AF    b1 c12 flags:ZNHC
+                   if (cpu_debug) printf("POP AF\n");
+                   {
+                       uint8_t low2 = mem_read8(SP);
+                       uint8_t high2 = mem_read8(SP + 1);
+                       SP += 2;
+                       F = low2 & 0xF0;
+                       A = high2;
+                   }
+                   PC += 1;
+                   return 12;
+        case 0xF2: // LDH A, [0xFF00 + C]    b1 c8 flags:----
+                   if (cpu_debug) printf("LDH A, [0xFF00 + C]\n");
+                   A = mem_read8(0xFF00 + C);
+                   PC += 1;
+                   return 8;
+        case 0xF3: // DI    b1 c4 flags:----
+                   if (cpu_debug) printf("DI\n");
+                   IME = false;
+                   ime_scheduled = false;  // Cancel any pending EI
+                   PC += 1;
+                   return 4;
+        case 0xF5: // PUSH AF    b1 c16 flags:----
+                   if (cpu_debug) printf("PUSH AF\n");
+                   SP -= 2;
+                   mem_write16(SP, AF);
+                   PC += 1;
+                   return 16;
+        case 0xF6: // OR A, <n8>    b2 c8 flags:Z000
+                   n8 = mem_read8(PC + 1);
+                   if (cpu_debug) printf("OR A, 0x%02X\n", n8);
+                   A = (A | n8);
+                   if (A == 0) SETF_Z; else CLRF_Z;
+                   CLRF_N; CLRF_H; CLRF_C;
+                   PC += 2;
+                   return 8;
+        case 0xF7: // RST $30    b1 c16 flags:----
+                   if (cpu_debug) printf("RST $30\n");
+                   SP -= 2;
+                   mem_write16(SP, PC + 1); 
+                   PC = 0x0030;
+                   return 16;
+        case 0xF8: // LD HL, SP+e8    b2 c12 flags=00HC
+                   e8 = (int8_t)mem_read8(PC + 1);
+                   if (cpu_debug) printf("LD HL, SP+0x%02X\n", e8);
+                   {
+                       uint16_t result = SP + e8;
+                       uint8_t unsigned_e8 = (uint8_t)mem_read8(PC + 1);  // Use unsigned for flag calc
+
+                       if (((SP & 0x0F) + (unsigned_e8 & 0x0F)) > 0x0F) SETF_H; else CLRF_H;
+                       if (((SP & 0xFF) + unsigned_e8) > 0xFF) SETF_C; else CLRF_C;
+
+                       CLRF_Z;
+                       CLRF_N;
+
+                       H = (result >> 8) & 0xFF;
+                       L = result & 0xFF;
+                   }
+                   PC += 2;
+                   return 12;
+        case 0xF9: // LD SP, HL    b1 c8 flags:----
+                   if (cpu_debug) printf("LD SP, HL\n");
+                   SP = HL;
+                   PC += 1;
+                   return 8;
+        case 0xFA:  //LD A, [a16]    b3 c16 flags:----
+                   a16 = mem_read8(PC + 1) | (mem_read8(PC + 2) << 8);
+                   if (cpu_debug) printf("LD A, [0x%04X]\n", a16);
+                   A = mem_read8(a16);
+                   PC += 3;
+                   return 16;
+        case 0xFB: // EI    b1 c4 flags:----
+                   if (cpu_debug) printf("EI\n");
+                   ime_scheduled = true;
+                   PC += 1;
+                   return 4;
+        case 0xFE: // CP A, <n8>    b2 c8 flags:Z1HC
+                   n8 = mem_read8(PC + 1);
+                   if (n8 == 0x94) {
+                   }
+                   if (cpu_debug) printf("CP A, 0x%02X\n", n8);
+                   if (n8 == A) SETF_Z; else CLRF_Z;
+                   SETF_N;
+                   if ((n8 & 0x0F) > (A & 0x0F)) SETF_H; else CLRF_H;
+                   if (n8 > A) SETF_C; else CLRF_C;
+                   PC += 2;
+                   return 8;
+        case 0xFF: // RST $38    b1 c16 flags:----
+                   if (cpu_debug) printf("RST $38\n");
+                   SP -= 2;
+                   mem_write16(SP, PC + 1); 
+                   PC = 0x0038;
+                   return 16;
+        default:
+                   printf("<UNKNOWN 0x%02X at PC=0x%04X>\n", op, PC);
+                   exit(1);
+
+    }
+}
+void inc_reg16(uint8_t *low, uint8_t *high) {
+    uint16_t reg = (*low) | ((*high) << 8);
+    reg++;
+    *low = (uint8_t)reg;
+    *high = reg >> 8;
+}
+void dec_reg16(uint8_t *low, uint8_t *high) {
+    uint16_t reg = (*low) | ((*high) << 8);
+    reg--;
+    *low = (uint8_t)reg;
+    *high = reg >> 8;
+}
+void handle_interrupts(void) {
+    if (IME == false) {
+        return;
+    }
+    if ((*IE & *IF & 0b00000001) == 0b00000001) { // VBlank
+        IME = false;
+        *IF = (*IF & 0b11111110);
+        SP -= 2;
+        mem_write16(SP, PC);
+        PC = 0x40;
+        if (cpu_debug) printf("<VBlank Interrupt>\n");
+    } else if ((*IE & *IF & 0b00000010) == 0b00000010) { // LCD
+        IME = false;
+        *IF = (*IF & 0b11111101);
+        SP -= 2;
+        mem_write16(SP, PC);
+        PC = 0x48;
+        if (cpu_debug) printf("<STAT Interrupt>\n");
+    } else if ((*IE & *IF & 0b00000100) == 0b00000100) { // Timer
+        IME = false;
+        *IF =  (*IF & 0b11111011);
+        SP -= 2;
+        mem_write16(SP, PC);
+        PC = 0x50;
+        if (cpu_debug) printf("<Timer Interrupt>\n");
+    } else if ((*IE & *IF & 0b00001000) == 0b00001000) { // serial
+        IME = false;
+        *IF = (*IF & 0b11110111);
+        SP -= 2;
+        mem_write16(SP, PC);
+        PC = 0x58;
+        if (cpu_debug) printf("<Serial Interrupt>\n");
+    } else if ((*IE & *IF & 0b00010000) == 0b00010000) { // Joypad
+        IME = false;
+        *IF = (*IF & 0b11101111);
+        SP -= 2;
+        mem_write16(SP, PC);
+        PC = 0x60;
+        if (cpu_debug) printf("<Joypad Interrupt>\n");
+    }
+    halted = false;
+}
+
+void show_registers() {
+    printf("\tA=0x%02X\n", A); 
+    printf("\tBC=0x%04X\n", BC); 
+    printf("\tDE=0x%04X\n", DE); 
+    printf("\tHL=0x%04X\n", HL); 
+    printf("\tSP=0x%04X\n", SP); 
+    printf("\tPC=0x%04X\n", PC); 
+    printf("\t");
+    if ((F & 0b10000000) != 0) printf("Z:1 "); else printf("Z:0 ");
+    if ((F & 0b01000000) != 0) printf("N:1 "); else printf("N:0 ");
+    if ((F & 0b00100000) != 0) printf("H:1 "); else printf("H:0 ");
+    if ((F & 0b00010000) != 0) printf("C:1 "); else printf("C:0 ");
+    printf("\n\n");
+}
