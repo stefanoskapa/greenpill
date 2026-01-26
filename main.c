@@ -11,7 +11,6 @@
 
 #define CYCLES_PER_FRAME 70224  // 154 scanlines × 456 cycles
 
-uint64_t timer_diff(struct timespec *start, struct timespec *end);
 uint8_t mem_read8(uint16_t addr);
 void show_cartridge_info();
 void mem_write8(uint16_t addr, uint8_t b);
@@ -19,6 +18,35 @@ void mem_write16(uint16_t addr, uint16_t b);
 void timer_step(int cycles);
 uint8_t *get_tile(int index);
 void check_joyp();
+static void load_rom(char *filename);
+
+uint8_t logo[] = {
+    0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, 0x03, 0x73, 0x00, 0x83, 0x00, 0x0C, 0x00, 0x0D,
+    0x00, 0x08, 0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E, 0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99,
+    0xBB, 0xBB, 0x67, 0x63, 0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E
+};
+
+char *cart_type[] = {
+    [0x00] = "ROM ONLY", [0x01] = "MBC1", [0x02] = "MBC1+RAM", [0x03] = "MBC1+RAM+BATTERY",
+    [0x05] = "MBC2", [0x06] = "MBC2+BATTERY", [0x08] = "ROM+RAM", [0x09] = "ROM+RAM+BATTERY",
+    [0x0B] = "MMM01", [0x0C] = "MMM01+RAM", [0x0D] = "MMM01+RAM+BATTERY", [0x0F] = "MBC3+TIMER+BATTERY",
+    [0x10] = "MBC3+TIMER+RAM+BATTERY", [0x11] = "MBC3", [0x12] = "MBC3+RAM", [0x13] = "MBC3+RAM+BATTERY",
+    [0x19] = "MBC5", [0x1A] = "MBC5+RAM", [0x1B] = "MBC5+RAM+BATTERY", [0x1C] = "MBC5+RUMBLE",
+    [0x1D] = "MBC5+RUMBLE+RAM", [0x1E] = "MBC5+RUMBLE+RAM+BATTERY", [0x20] = "MBC6",
+    [0x22] = "MBC7+SENSOR+RUMBLE+RAM+BATTERY", [0xFC] = "POCKET CAMERA", [0xFD] = "BANDAI TAMA5",
+    [0xFE] = "HuC3", [0xFF] = "HuC1+RAM+BATTERY"
+};
+
+static char *rom_sizes[] = {
+    [0x00] = "32 KiB", [0x01] = "64 KiB", [0x02] = "128 KiB", [0x03] = "256 KiB",
+    [0x04] = "512 KiB", [0x05] = "1 MiB", [0x06] = "2 MiB", [0x07] = "4 MiB",
+    [0x08] = "8 MiB", [0x52] = "1.1 MiB", [0x53] = "1.2 MiB", [0x54] = "1.5 MiB"
+};
+
+static int rom_banks[] = {
+    [0x00] = 2, [0x01] = 4, [0x02] = 8, [0x03] = 16, [0x04] = 32, [0x05] = 64,
+    [0x06] = 128, [0x07] = 256, [0x08] = 512, [0x52] = 72, [0x53] = 80, [0x54] = 96
+};
 
 SDL_Event event;
 bool debug = false;
@@ -75,10 +103,8 @@ int div_counter = 0;
 
 struct timespec frame_start, frame_end;
 
+
 int main(int argc, char **argv) {
-    mem[0xFF00] = 0b11111111; //reset joypad
-    *SC = 0b00000000;
-    *SB = 0xFF;
     if (argc < 2) {
         fprintf(stderr, "No rom file was provided\n");
         exit(1);
@@ -87,19 +113,8 @@ int main(int argc, char **argv) {
         debug = true;
     } 
 
-    FILE *rom_file = fopen(argv[1], "rb");
-    if (rom_file == NULL) {
-        fprintf(stderr, "Could not access file: %s\n", argv[1]);
-        exit(1);
-    }
+    load_rom(argv[1]);
 
-    fseek(rom_file, 0, SEEK_END);
-    uint32_t size = ftell(rom_file);
-    rewind(rom_file);
-    fread(mem, 1, size, rom_file);
-    fclose(rom_file);
-
-    printf("ROM file is %u bytes\n", size);
     show_cartridge_info();
 
     uint16_t cycles = 0;
@@ -109,6 +124,10 @@ int main(int argc, char **argv) {
     cpu_init();
     apu_init();
     ppu_init();
+
+    mem[0xFF00] = 0b11111111; //reset joypad
+    *SC = 0b00000000;
+    *SB = 0xFF;
 
     while (true) {
 
@@ -133,12 +152,6 @@ int main(int argc, char **argv) {
     }
 
     return EXIT_SUCCESS;
-}
-
-uint64_t timer_diff(struct timespec *start, struct timespec *end) {
-    uint64_t difference = (uint64_t)(end->tv_sec - start->tv_sec) * 1000000000ULL;
-    difference += (uint64_t)(end->tv_nsec - start->tv_nsec);
-    return difference;
 }
 
 uint8_t mem_read8(uint16_t addr) {
@@ -196,45 +209,7 @@ void mem_write16(uint16_t addr, uint16_t b) {
     mem_write8(addr + 1, (b >> 8) & 0xFF);
 }
 
-uint8_t logo[] = {
-    0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, 0x03, 0x73, 0x00, 0x83, 0x00, 0x0C, 0x00, 0x0D,
-    0x00, 0x08, 0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E, 0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99,
-    0xBB, 0xBB, 0x67, 0x63, 0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E
-};
-
-char *cart_type[] = {
-    [0x00] = "ROM ONLY",
-    [0x01] = "MBC1",
-    [0x02] = "MBC1+RAM",
-    [0x03] = "MBC1+RAM+BATTERY",
-    [0x05] = "MBC2",
-    [0x06] = "MBC2+BATTERY",
-    [0x08] = "ROM+RAM",
-    [0x09] = "ROM+RAM+BATTERY",
-    [0x0B] = "MMM01",
-    [0x0C] = "MMM01+RAM",
-    [0x0D] = "MMM01+RAM+BATTERY",
-    [0x0F] = "MBC3+TIMER+BATTERY",
-    [0x10] = "MBC3+TIMER+RAM+BATTERY",
-    [0x11] = "MBC3",
-    [0x12] = "MBC3+RAM",
-    [0x13] = "MBC3+RAM+BATTERY",
-    [0x19] = "MBC5",
-    [0x1A] = "MBC5+RAM",
-    [0x1B] = "MBC5+RAM+BATTERY",
-    [0x1C] = "MBC5+RUMBLE",
-    [0x1D] = "MBC5+RUMBLE+RAM",
-    [0x1E] = "MBC5+RUMBLE+RAM+BATTERY",
-    [0x20] = "MBC6",
-    [0x22] = "MBC7+SENSOR+RUMBLE+RAM+BATTERY",
-    [0xFC] = "POCKET CAMERA",
-    [0xFD] = "BANDAI TAMA5",
-    [0xFE] = "HuC3",
-    [0xFF] = "HuC1+RAM+BATTERY"
-};
-
 void show_cartridge_info() {
-
     uint8_t cgb_flag = mem[0x0143];
     char *cart_comp;
 
@@ -245,65 +220,23 @@ void show_cartridge_info() {
     } else {
         cart_comp = "DMG";
     }
-    bool is_old_licensee = mem[0x014B] != 0x33;
     bool logo_found = memcmp(logo, mem + 0x104, 48) == 0;
     printf("Genuine Nintendo logo found: %s\n", logo_found ? "YES" : "NO");
     printf("Title: %s\n", mem + 0x134);
     printf("Cartridge compatibility: %s\n", cart_comp);
     printf("Cartridge type: %s\n", cart_type[mem[0x0147]]);
+    uint8_t ram_size = mem[0x0149];
+    printf("Cartridge RAM: ");
+    if (ram_size == 0x00) printf("none\n");
+    else if (ram_size == 0x02) printf("8 KiB\n");
+    else if (ram_size == 0x03) printf("32 KiB\n");
+    else if (ram_size == 0x04) printf("128 KiB\n");
+    else if (ram_size == 0x05) printf("64 KiB\n");
     printf("SGB support: %s\n", mem[0x0146] == 0x03 ? "YES" : "NO");
     uint8_t rom_size = mem[0x0148];
-    if (rom_size == 0x00) {
-        printf("ROM size: 32 KiB\n");
-        printf("ROM banks: 2 (no banking)\n");
-    } else if (rom_size == 0x01) {
-        printf("ROM size: 64 KiB\n");
-        printf("ROM banks: 4\n");
-    } else if (rom_size == 0x02) {
-        printf("ROM size: 128 KiB\n");
-        printf("ROM banks: 8\n");
-    } else if (rom_size == 0x03) {
-        printf("ROM size: 256 KiB\n");
-        printf("ROM banks: 16\n");
-    } else if (rom_size == 0x04) {
-        printf("ROM size: 512 KiB\n");
-        printf("ROM banks: 32\n");
-    } else if (rom_size == 0x05) {
-        printf("ROM size: 1 MiB\n");
-        printf("ROM banks: 64\n");
-    } else if (rom_size == 0x06) {
-        printf("ROM size: 2 MiB\n");
-        printf("ROM banks: 128\n");
-    } else if (rom_size == 0x07) {
-        printf("ROM size: 4 MiB\n");
-        printf("ROM banks: 256\n");
-    } else if (rom_size == 0x08) {
-        printf("ROM size: 8 MiB\n");
-        printf("ROM banks: 512\n");
-    } else if (rom_size == 0x52) {
-        printf("ROM size: 1.1 MiB\n");
-        printf("ROM banks: 72\n");
-    } else if (rom_size == 0x53) {
-        printf("ROM size: 1.2 MiB\n");
-        printf("ROM banks: 80\n");
-    } else if (rom_size == 0x54) {
-        printf("ROM size: 1.5 MiB\n");
-        printf("ROM banks: 96\n");
-    }
-    uint8_t ram_size = mem[0x0149];
-    if (ram_size == 0x00) {
-        printf("cartridge RAM: none\n");
-    } else if (ram_size == 0x02) {
-        printf("cartridge RAM: 8 KiB\n");
-    } else if (ram_size == 0x03) {
-        printf("cartridge RAM: 32 KiB\n");
-    } else if (ram_size == 0x04) {
-        printf("cartridge RAM: 128 KiB\n");
-    } else if (ram_size == 0x05) {
-        printf("cartridge RAM: 64 KiB\n");
-    }
-    printf("\n");
-
+    printf("ROM size: %s\n", rom_sizes[rom_size]);
+    printf("ROM banks: %d\n", rom_banks[rom_size]);
+    puts(""); 
 }
 
 void timer_step(int cycles) {
@@ -366,8 +299,6 @@ void check_joyp() {
                 case SDLK_d:     b_sel = true; break;
                 case SDLK_a:     b_a = true; break;
                 case SDLK_b:     b_b = true; break;
-                case SDLK_F11:  
-                                 return;
             }
             *IF |= 0b00010000;  // Request joypad interrupt
         } else if (event.type == SDL_KEYUP) {
@@ -386,3 +317,16 @@ void check_joyp() {
     }
 }
 
+static void load_rom(char *filename) {
+    FILE *rom_file = fopen(filename, "rb");
+    if (rom_file == NULL) {
+        fprintf(stderr, "Could not access file: %s\n", filename);
+        exit(1);
+    }
+
+    fseek(rom_file, 0, SEEK_END);
+    uint32_t size = ftell(rom_file);
+    rewind(rom_file);
+    fread(mem, 1, size, rom_file);
+    fclose(rom_file);
+}
