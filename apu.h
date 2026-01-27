@@ -5,4 +5,6 @@ void audio_delay(void);
 void apu_memw_callback(uint16_t addr, uint8_t b);
 void inc_ch1_len();
 void inc_ch2_len();
+void ch1_env_call();
+void ch2_env_call();
 

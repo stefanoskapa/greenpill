@@ -21,7 +21,7 @@ void check_joyp();
 static void load_rom(char *filename);
 
 bool debug = false;
-bool apu_debug = true;
+bool apu_debug = false;
 bool cpu_debug = false;
 
 uint8_t logo[] = {
@@ -249,7 +249,8 @@ void timer_step(int cycles) {
 
         //
         if (mem[0xFF04] % 512 == 0) { // every 64 Hz
-
+            ch1_env_call();
+            ch2_env_call();
         } 
 
         if (mem[0xFF04] % 64 == 0) { //256 Hz

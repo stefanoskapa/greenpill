@@ -102,7 +102,9 @@ static float channel1_phase_increment = 0;
 static uint8_t channel1_length = 0;
 static bool channel1_length_enabled = false;
 static uint8_t channel1_sweep_pace = 0;
-
+static uint8_t channel1_envelope_pace = 0;
+static uint8_t channel1_envelope_counter = 0;
+static uint8_t channel1_envelope_dir = 0;
 
 static bool channel2_playing = false;
 static uint8_t channel2_volume = 0;
@@ -110,6 +112,9 @@ static float channel2_phase = 0;
 static float channel2_phase_increment = 0;
 static uint8_t channel2_length = 0;
 static bool channel2_length_enabled = false;
+static uint8_t channel2_envelope_pace = 0;
+static uint8_t channel2_envelope_counter = 0;
+static uint8_t channel2_envelope_dir = 0;
 
 SDL_AudioDeviceID audio_device;
 SDL_AudioSpec audio_spec;
@@ -140,7 +145,6 @@ void apu_step(int cycles) {
             sample += (channel1_phase < 0.5f) ? channel1_volume * vol_steps : channel1_volume * (-vol_steps);
             channel1_phase += channel1_phase_increment;
             if (channel1_phase >= 1.0f) channel1_phase -= 1.0f;
-            puts("ch1");
         }
 
         //if (channel2_playing) {
@@ -148,10 +152,32 @@ void apu_step(int cycles) {
             sample += (channel2_phase < 0.5f) ? channel2_volume * vol_steps : channel2_volume * (-vol_steps);
             channel2_phase += channel2_phase_increment;
             if (channel2_phase >= 1.0f) channel2_phase -= 1.0f;
-            puts("ch2");
         }
 
         SDL_QueueAudio(audio_device, &sample, sizeof(sample));
+    }
+}
+
+void ch1_env_call() {
+    if (channel1_envelope_pace == 0) return;
+    channel1_envelope_counter++;
+    if (channel1_envelope_counter == channel1_envelope_pace) {
+       channel1_volume += (channel1_envelope_dir == 0 ? -1 : 1);
+       if (channel1_volume < 0 || channel1_volume > 15) {
+           channel1_volume = 0;
+       }
+       channel1_envelope_counter = 0;
+    }
+}
+void ch2_env_call() {
+    if (channel2_envelope_pace == 0) return;
+    channel2_envelope_counter++;
+    if (channel2_envelope_counter == channel2_envelope_pace) {
+       channel2_volume += (channel2_envelope_dir == 0 ? -1 : 1);
+       if (channel2_volume < 0 || channel2_volume > 15) {
+           channel2_volume = 0;
+       }
+       channel2_envelope_counter = 0;
     }
 }
 
@@ -210,13 +236,20 @@ void apu_memw_callback(uint16_t addr, uint8_t b) {
                 channel1_length = *NR11 & 0b00111111;
                 channel1_length_enabled = (b & 0b01000000) != 0;
                 channel1_sweep_pace = (*NR10 & 0b01110000) >> 4;
+                channel1_envelope_pace = (*NR12 & 0b00000111);
+                channel1_envelope_dir = (*NR12 & 0b00001000) >> 4;
                 if (apu_debug) {
-                    puts("Ch1: triggered");
-                    printf("Ch1: initial volume = %u\n", channel1_volume);
-                    printf("Ch1: period = %u (%f Hz)\n", period, frequency);
-                    printf("Ch1: length = %u\n", channel1_length);
-                    printf("Ch1: length enabled = %s\n", channel1_length_enabled ? "YES": "NO");
-                    printf("CH1: sweep pace = %u\n", channel1_sweep_pace);
+                    puts("Ch1 triggered");
+                    printf("\tinitial volume = %u\n", channel1_volume);
+                    printf("\tperiod = %u (%f Hz)\n", period, frequency);
+                    printf("\tlength = %u\n", channel1_length);
+                    printf("\tlength enabled = %s\n", channel1_length_enabled ? "YES": "NO");
+                    printf("\tsweep pace = %u\n", channel1_sweep_pace);
+                    if (channel1_envelope_pace != 0) {
+                        printf("\tEnvelope sweep pace = %u\n", channel1_envelope_pace);
+                        printf("\tEnvelope direction = %s\n", channel1_envelope_dir == 0 ? "DOWN" : "UP");
+                    }
+                    
                 }
              }
              break;
@@ -238,12 +271,18 @@ void apu_memw_callback(uint16_t addr, uint8_t b) {
                 channel2_phase_increment = frequency / 44100.0f;
                 channel2_length = *NR21 & 0b00111111;
                 channel2_length_enabled = (b & 0b01000000) != 0;
+                channel2_envelope_pace = (*NR22 & 0b00000111);
+                channel2_envelope_dir = (*NR22 & 0b00001000) >> 4;
                 if (apu_debug) {
-                    puts("Ch2: triggered");
-                    printf("Ch2: initial volume = %u\n", channel2_volume);
-                    printf("Ch2: period = %u (%f Hz)\n", period, frequency);
-                    printf("Ch2: length = %u\n", channel2_length);
-                    printf("Ch2: length enabled = %s\n", channel1_length_enabled ? "YES": "NO");
+                    puts("Ch2 triggered");
+                    printf("\tinitial volume = %u\n", channel2_volume);
+                    printf("\tperiod = %u (%f Hz)\n", period, frequency);
+                    printf("\tlength = %u\n", channel2_length);
+                    printf("\tlength enabled = %s\n", channel1_length_enabled ? "YES": "NO");
+                    if (channel2_envelope_pace != 0) {
+                        printf("\tEnvelope sweep pace = %u\n", channel2_envelope_pace);
+                        printf("\tEnvelope direction = %s\n", channel2_envelope_dir == 0 ? "DOWN" : "UP");
+                    }
                 }
              }
              break;
