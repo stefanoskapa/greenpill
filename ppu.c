@@ -12,14 +12,49 @@ struct sprite {
     uint8_t y, x, tile, flags;
 };
 
-// PPU registers
+/*
+ * LCDC: LCD control (0xFF40)
+ * - 0: BG & Window enable / priority
+ * - 1: OBJ enable
+ * - 2: OBJ size
+ * - 3: BG tile map
+ * - 4: BG & Window tiles
+ * - 5: Window enable
+ * - 6: Window tile map
+ * - 7: LCD & PPU enable
+ */
 uint8_t *LCDC = &mem[0xFF40];
+/*
+ * LY: LCD Y coordinate [read-only] (0xFF44)
+ */
 uint8_t *LY = &mem[0xFF44];
+/*
+ * STAT: LCD status (0xFF41)
+ *
+ * - 0-1: PPU mode
+ * - 2: LYC == LY
+ * - 3: Mode 0 int select
+ * - 4: Mode 1 int select
+ * - 5: Mode 2 int select
+ * - 6: LYC int select
+ * - 7: 
+ */
 uint8_t *STAT = &mem[0xFF41];
+/*
+ * LYC: LY compare (0xFF45)
+ */
+uint8_t *LYC = &mem[0xFF45];
+/*
+ * SCY: Background viewport Y position (0xFF42)
+ */
 uint8_t *SCY = &mem[0xFF42];
+/*
+ * SCX: Background viewport X position (0xFF43)
+ */
 uint8_t *SCX = &mem[0xFF43];
-static int dots = 0;
 
+
+static int dots = 0;
 bool sdl_render = true;
 uint32_t framebuffer[160 * 144];
 SDL_Window *window;
@@ -60,28 +95,28 @@ void ppu_init(void) {
 }
 
 void ppu_step() {
+
+    if (*LYC == *LY) {
+        *STAT |= 0b00000100; // set LYC=LY flag
+        if ((*STAT & 0b01000000) != 0) {
+            *IF |= 0b00000010;  // Request STAT interrupt
+        }
+    }
+
     dots++; 
 
     static struct sprite intersecting_sprites[10];
-    static int inter_sprite_len = 0;
+    static int sprites_per_line = 0;
 
     int height = (*LCDC & 0b00000100) ? 16 : 8; //LCDC bit 2 = 0 -> 8x8
 
-    if (dots > 0 && dots <= 80) {
-        // mode 2 - OAM scan
-        // duration: 80 dots
-        // description: Searching for OBJs which overlap this line (OAM inaccessible)
-        // plan: Scan the 40 OAM entries to find which intersect with the current line
-        // Object attributes reside in the object attribute memory (OAM) at $FE00-FE9F.
-        // Each of the 40 entries consists of four bytes
-        // Object’s vertical position on the screen + 16
-        *STAT = (*STAT & 0b11111100) | 0b10;  // Mode 2
+    if (dots > 0 && dots <= 80) { // mode 2 - OAM scan, duration: 80 dots
+        *STAT = (*STAT & 0b11111100) | 0b10; // report Mode 2 to STAT
         if (dots == 1) { // do all work on dot 1, then wait for the remaining dots
-            inter_sprite_len = 0;
+            sprites_per_line = 0;
 
             for (int i = 0; i < 40; i++) {
-
-                if (inter_sprite_len == 10) {
+                if (sprites_per_line == 10) {
                     if (debug) puts("more than 10 objects per line found. ignoring...");
                     break;
                 }
@@ -96,17 +131,12 @@ void ppu_step() {
                 // determine intersection with LY
                 int screen_y = object.y - 16;
                 if (*LY >= screen_y && *LY < screen_y + height) {
-                    intersecting_sprites[inter_sprite_len++] = object;
+                    intersecting_sprites[sprites_per_line++] = object;
                 }
             }
         }
-
-    } else if (dots > 80 && dots <= 456) {
-        // mode 3 - Drawing Pixels
-        // duration: between 172 and 289
-        // description: Sending pixels to the LCD (VRAM inaccessible)
-        *STAT = (*STAT & 0b11111100) | 0b11;  // Mode 3
-
+    } else if (dots > 80 && dots <= 456) { // mode 3 - Drawing Pixels duration: between 172 and 289 dots
+        *STAT = (*STAT & 0b11111100) | 0b11;  // report Mode 3 to STAT
         if (dots == 81 && *LY < 144) {
             uint16_t bg_tilemap_addr;
             if ((*LCDC & 0b00001000) == 0) {
@@ -115,14 +145,12 @@ void ppu_step() {
                 bg_tilemap_addr = 0x9C00;
             }
 
-
             int y = (*SCY + *LY) & 0xFF;
 
             int tile_row = y / 8;
             int row_in_tile = y % 8; 
 
-            //160 pixels / 8 pixels per tile = 20 tiles.
-            for (int i = 0; i < 20; i++) {
+            for (int i = 0; i < 20; i++) { // 160px / (8px per tile) = 20
                 int map_x = (*SCX + (i * 8)) & 0xFF;
 
                 int tile_col = map_x / 8;
@@ -141,29 +169,10 @@ void ppu_step() {
             }
 
             //mix background, window and objects
-            //write scanline to SDL array
-            // Y = Object’s vertical position on the screen + 16
-            // X = Object’s horizontal position on the screen + 8
-            //puts("rendering objects");
-            //uint8_t pixel_prio_map[144] = {0};
-            for (int i = inter_sprite_len - 1; i >=0; i--) {
+            for (int i = sprites_per_line - 1; i >=0; i--) {
                 struct sprite object = intersecting_sprites[i];
                 int row_in_sprite = *LY - (object.y - 16);
 
-                //get pixels from tilemaps
-                // 8x8  The index byte specifies the object’s only tile 
-                //      index ($00-$FF). This unsigned value selects a 
-                //      tile from the memory area at $8000-$8FFF
-                // 8x16 The memory area at $8000-$8FFF is still interpreted 
-                //      as a series of 8×8 tiles, where every 2 tiles form 
-                //      an object. In this mode, this byte specifies 
-                //      the index of the first (top) tile of the object.
-                //
-                //Data format in tile data
-                //Each tile occupies 16 bytes, where each line is represented by 2 bytes
-                //For each line, the first byte specifies the least significant bit of the 
-                //color ID of each pixel, and the second byte specifies the most significant 
-                //bit. In both bytes, bit 7 represents the leftmost pixel, and bit 0 the rightmost.
                 if (height == 8) { 
                     uint8_t byte1 = mem[0x8000 + object.tile * 16 + row_in_sprite * 2];
                     uint8_t byte2 = mem[0x8000 + object.tile * 16 + row_in_sprite * 2 + 1];
@@ -172,18 +181,11 @@ void ppu_step() {
                     printf("Tall sprites detected!\n");
                     exit(1);
                 }
-
-
-
             }
         }
 
-        //artificial mode change for testing
-        if (dots > 80 + 172) {
-            // mode 0 - Horizontal Blank
-            // duration: 376 - mode 3’s duration
-            // description: Waiting until the end of the scanline
-            *STAT = (*STAT & 0b11111100) | 0b00;  // Mode 0
+        if (dots > 80 + 172) { //mode 0 - Horizontal Blank, duration: 376 - mode 3’s duration
+            *STAT = (*STAT & 0b11111100) | 0b00;  // report Mode 0 to STAT
         }
     }
 
@@ -191,18 +193,16 @@ void ppu_step() {
         dots = 0;
         (*LY)++;
 
-        if (*LY == 144) { // mode 1 Vertical Blank (LY= [144,153])
-                          // mode 1 - Vertical Blank
-                          // duration: 4560 dots (10 scanlines)
-                          // description: Waiting until the next frame
-            *STAT = (*STAT & 0b11111100) | 0b01;  // Mode 1
-            *IF |= 0b00000001;  // Request VBlank interrupt!
+        if (*LY == 144) { // mode 1 Vertical Blank (LY= [144,153]) duration: 4560 dots (10 scanlines)
+            *STAT = (*STAT & 0b11111100) | 0b01;  // report Mode 1 to STAT
+            *IF |= 0b00000001;  // Request VBlank interrupt
             show_frame();
         } else if (*LY > 153) {
             *LY = 0;
         }
     }
 }
+
 void ppu_steps(int cycles) {
     for (int i = 0; i < cycles; i++) {
         ppu_step();
