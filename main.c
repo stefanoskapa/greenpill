@@ -53,10 +53,12 @@ static int rom_banks[] = {
 };
 
 SDL_Event event;
-uint8_t mem[2000000];
+uint8_t mem[0xFFFF];
 /*
  * Serial transfer data
  */
+uint8_t romfile[2000000];
+
 uint8_t *SB = &mem[0xFF01];
 
 /*
@@ -104,6 +106,7 @@ int div_counter = 0;
 
 struct timespec frame_start, frame_end;
 
+uint8_t cartridge_type = 0;
 
 int main(int argc, char **argv) {
     if (argc < 2) {
@@ -116,6 +119,7 @@ int main(int argc, char **argv) {
 
     load_rom(argv[1]);
 
+    memcpy(mem, romfile, 0x7FFF);
     show_cartridge_info();
 
     uint16_t cycles = 0;
@@ -160,6 +164,14 @@ uint8_t mem_read8(uint16_t addr) {
 }
 
 void mem_write8(uint16_t addr, uint8_t b) {
+    if (addr >=0x2000 && addr <= 0x3FFF) {
+           uint8_t bank_nr = b & 0b00011111;
+           if (debug) printf("ROM Bank %u selected\n", bank_nr);
+           if (cartridge_type == 0x01) { //MBC1
+               int file_offset = bank_nr * 0x4000;
+               memcpy(&mem[0x4000],&romfile[file_offset],16384);
+           }
+    }
     if (addr == 0xFF02) { //SC
         if((b & 0b10000001) == 0b10000001) {
             *SB = 0b11111111; //unplugged
@@ -222,10 +234,11 @@ void show_cartridge_info() {
         cart_comp = "DMG";
     }
     bool logo_found = memcmp(logo, mem + 0x104, 48) == 0;
+    cartridge_type = mem[0x0147];
     printf("Genuine Nintendo logo found: %s\n", logo_found ? "YES" : "NO");
     printf("Title: %s\n", mem + 0x134);
     printf("Cartridge compatibility: %s\n", cart_comp);
-    printf("Cartridge type: %s\n", cart_type[mem[0x0147]]);
+    printf("Cartridge type: %s\n", cart_type[cartridge_type]);
     uint8_t ram_size = mem[0x0149];
     printf("Cartridge RAM: ");
     if (ram_size == 0x00) printf("none\n");
@@ -331,6 +344,6 @@ static void load_rom(char *filename) {
     fseek(rom_file, 0, SEEK_END);
     uint32_t size = ftell(rom_file);
     rewind(rom_file);
-    fread(mem, 1, size, rom_file);
+    fread(romfile, 1, size, rom_file);
     fclose(rom_file);
 }
