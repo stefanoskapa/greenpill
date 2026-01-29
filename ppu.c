@@ -139,6 +139,7 @@ void ppu_step() {
                 };
 
                 // determine intersection with LY
+                //int screen_y = object.y - height * 2;
                 int screen_y = object.y - 16;
                 if (*LY >= screen_y && *LY < screen_y + height) {
                     intersecting_sprites[sprites_per_line++] = object;
@@ -181,9 +182,7 @@ void ppu_step() {
                 bool y_flip = ((object.flags & 0b01000000) != 0);
                 int row_in_sprite = *LY - (object.y - 16);
                 if (y_flip) {
-
                     row_in_sprite = 7 - row_in_sprite;
-                    
                 }
                 if (height == 8) { 
                     uint8_t byte1 = mem[0x8000 + object.tile * 16 + row_in_sprite * 2];

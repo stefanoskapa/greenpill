@@ -167,7 +167,7 @@ void mem_write8(uint16_t addr, uint8_t b) {
     if (addr >=0x2000 && addr <= 0x3FFF) {
            uint8_t bank_nr = b & 0b00011111;
            if (debug) printf("ROM Bank %u selected\n", bank_nr);
-           if (cartridge_type == 0x01) { //MBC1
+           if (cartridge_type != 0x00) { //MBC1
                int file_offset = bank_nr * 0x4000;
                memcpy(&mem[0x4000],&romfile[file_offset],16384);
            }
