@@ -57,6 +57,8 @@ uint8_t *SCX = &mem[0xFF43];
 static int dots = 0;
 bool sdl_render = true;
 uint32_t framebuffer[160 * 144];
+uint16_t bg_tilemap_addr;
+
 SDL_Window *window;
 SDL_Renderer *renderer;
 SDL_Texture *texture;
@@ -69,6 +71,8 @@ uint32_t palette[4] = {
 };
 
 static void show_frame();
+static void render_tile_row(uint8_t byte1, uint8_t byte2, int x, bool is_obj, uint8_t flags);
+static void ppu_step();
 
 void ppu_init(void) {
 
@@ -92,6 +96,13 @@ void ppu_init(void) {
                 SDL_TEXTUREACCESS_STREAMING,
                 160, 144
                 ); 
+
+    if ((*LCDC & 0b00001000) == 0) {
+        bg_tilemap_addr = 0x9800;
+    } else {
+        bg_tilemap_addr = 0x9C00;
+    }
+
 }
 
 void ppu_step() {
@@ -107,7 +118,6 @@ void ppu_step() {
 
     static struct sprite intersecting_sprites[10];
     static int sprites_per_line = 0;
-
     int height = (*LCDC & 0b00000100) ? 16 : 8; //LCDC bit 2 = 0 -> 8x8
 
     if (dots > 0 && dots <= 80) { // mode 2 - OAM scan, duration: 80 dots
@@ -138,20 +148,16 @@ void ppu_step() {
     } else if (dots > 80 && dots <= 456) { // mode 3 - Drawing Pixels duration: between 172 and 289 dots
         *STAT = (*STAT & 0b11111100) | 0b11;  // report Mode 3 to STAT
         if (dots == 81 && *LY < 144) {
-            uint16_t bg_tilemap_addr;
-            if ((*LCDC & 0b00001000) == 0) {
-                bg_tilemap_addr = 0x9800;
-            } else {
-                bg_tilemap_addr = 0x9C00;
-            }
 
             int y = (*SCY + *LY) & 0xFF;
 
             int tile_row = y / 8;
             int row_in_tile = y % 8; 
 
-            for (int i = 0; i < 20; i++) { // 160px / (8px per tile) = 20
-                int map_x = (*SCX + (i * 8)) & 0xFF;
+            int fine_x = *SCX & 7;  // pixels to skip in first tile
+
+            for (int i = 0; i < 21; i++) {  // Need 21 tiles to cover screen when scrolling
+                int map_x = (*SCX + i * 8) & 0xFF;  
 
                 int tile_col = map_x / 8;
                 uint8_t tile_index = mem[bg_tilemap_addr + (tile_row * 32) + tile_col];
@@ -165,10 +171,11 @@ void ppu_step() {
 
                 uint8_t bgbyte1 = mem[tile_addr + row_in_tile * 2];
                 uint8_t bgbyte2 = mem[tile_addr + row_in_tile * 2 + 1];
-                send_word_to_buffer(bgbyte1, bgbyte2, i * 8, false, 0);               
+
+                render_tile_row(bgbyte1, bgbyte2, i * 8 - fine_x, false, 0);
             }
 
-            //mix background, window and objects
+            // render sprites
             for (int i = sprites_per_line - 1; i >=0; i--) {
                 struct sprite object = intersecting_sprites[i];
                 int row_in_sprite = *LY - (object.y - 16);
@@ -176,7 +183,7 @@ void ppu_step() {
                 if (height == 8) { 
                     uint8_t byte1 = mem[0x8000 + object.tile * 16 + row_in_sprite * 2];
                     uint8_t byte2 = mem[0x8000 + object.tile * 16 + row_in_sprite * 2 + 1];
-                    send_word_to_buffer(byte1, byte2, object.x - 8, true, object.flags);               
+                    render_tile_row(byte1, byte2, object.x - 8, true, object.flags);               
                 } else {
                     printf("Tall sprites detected!\n");
                     exit(1);
@@ -208,7 +215,7 @@ void ppu_steps(int cycles) {
         ppu_step();
     }
 }
-void send_word_to_buffer(uint8_t byte1, uint8_t byte2, int x, bool is_obj, uint8_t flags) {
+void render_tile_row(uint8_t byte1, uint8_t byte2, int x, bool is_obj, uint8_t flags) {
 
     bool priority = flags & 0b10000000;
     bool y_flip = ((flags & 0b01000000) != 0) && is_obj;
