@@ -178,8 +178,13 @@ void ppu_step() {
             // render sprites
             for (int i = sprites_per_line - 1; i >=0; i--) {
                 struct sprite object = intersecting_sprites[i];
+                bool y_flip = ((object.flags & 0b01000000) != 0);
                 int row_in_sprite = *LY - (object.y - 16);
+                if (y_flip) {
 
+                    row_in_sprite = 7 - row_in_sprite;
+                    
+                }
                 if (height == 8) { 
                     uint8_t byte1 = mem[0x8000 + object.tile * 16 + row_in_sprite * 2];
                     uint8_t byte2 = mem[0x8000 + object.tile * 16 + row_in_sprite * 2 + 1];
@@ -218,7 +223,6 @@ void ppu_steps(int cycles) {
 void render_tile_row(uint8_t byte1, uint8_t byte2, int x, bool is_obj, uint8_t flags) {
 
     bool priority = flags & 0b10000000;
-    bool y_flip = ((flags & 0b01000000) != 0) && is_obj;
     bool x_flip = ((flags & 0b00100000) != 0) && is_obj;
 
     for (int j = 0; j < 8; j++) { // 8 pixels from left to right
