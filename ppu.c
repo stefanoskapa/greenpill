@@ -221,7 +221,7 @@ void ppu_steps(int cycles) {
 }
 void render_tile_row(uint8_t byte1, uint8_t byte2, int x, bool is_obj, uint8_t flags) {
 
-    bool priority = flags & 0b10000000;
+    bool priority = flags & 0b10000000; //0 = No, 1 = BG and Window color indices 1–3 are drawn over this OBJ
     bool x_flip = ((flags & 0b00100000) != 0) && is_obj;
 
     for (int j = 0; j < 8; j++) { // 8 pixels from left to right
@@ -233,7 +233,7 @@ void render_tile_row(uint8_t byte1, uint8_t byte2, int x, bool is_obj, uint8_t f
         uint8_t hi = (byte2 & b_mask) >> (7 - j);
         uint8_t color_code = lo | (hi << 1);
         if (is_obj == true && color_code == 0) continue;
-        if (is_obj == true && priority == false) { // any bg color except 0 overwrites the object
+        if (is_obj == true && priority == true) { // any bg color except 0 overwrites the object
             if (framebuffer[*LY * 160 + screen_x] != palette[0]){
                 continue;
             }
