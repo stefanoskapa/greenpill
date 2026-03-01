@@ -177,7 +177,7 @@ void ppu_step() {
             }
 
             // render sprites
-            for (int i = sprites_per_line - 1; i >=0; i--) {
+            for (int i = sprites_per_line - 1; i >= 0; i--) {
                 struct sprite object = intersecting_sprites[i];
                 bool y_flip = ((object.flags & 0b01000000) != 0);
                 int row_in_sprite = *LY - (object.y - 16);
@@ -189,8 +189,11 @@ void ppu_step() {
                     uint8_t byte2 = mem[0x8000 + object.tile * 16 + row_in_sprite * 2 + 1];
                     render_tile_row(byte1, byte2, object.x - 8, true, object.flags);               
                 } else {
-                    printf("Tall sprites detected!\n");
-                    exit(1);
+                    uint8_t byte1 = mem[0x8000 + (object.tile & 0b11111110) * 16 + row_in_sprite * 2];
+                    uint8_t byte2 = mem[0x8000 + (object.tile & 0b11111110) * 16 + row_in_sprite * 2 + 1];
+                    render_tile_row(byte1, byte2, object.x - 8, true, object.flags);               
+                    //printf("Tall sprites detected!\n");
+                    //exit(1);
                 }
             }
         }
