@@ -53,10 +53,20 @@ uint8_t *SCY = &mem[0xFF42];
  */
 uint8_t *SCX = &mem[0xFF43];
 
+/*
+ * BGP: BG palette data
+ */
+uint8_t *BGP = &mem[0xFF47];
+
+uint8_t *OBP0 = &mem[0xFF48];
+
+uint8_t *OBP1 = &mem[0xFF49];
 
 static int dots = 0;
 bool sdl_render = true;
 uint32_t framebuffer[160 * 144];
+uint8_t tempbuffer[160 * 144];
+
 uint16_t bg_tilemap_addr;
 
 SDL_Window *window;
@@ -73,6 +83,7 @@ uint32_t palette[4] = {
 static void show_frame();
 static void render_tile_row(uint8_t byte1, uint8_t byte2, int x, bool is_obj, uint8_t flags);
 static void ppu_step();
+static uint8_t convert_color_code(uint8_t color_code, uint8_t *palette_ptr);
 
 void ppu_init(void) {
 
@@ -222,6 +233,20 @@ void ppu_steps(int cycles) {
         ppu_step();
     }
 }
+
+static uint8_t convert_color_code(uint8_t color_code, uint8_t *palette_ptr) {
+    if (color_code == 0) {
+        color_code = *palette_ptr & 0b00000011;
+    } else if (color_code == 1) {
+        color_code = (*palette_ptr & 0b00001100) >> 2;
+    } else if (color_code == 2) {
+        color_code = (*palette_ptr & 0b00110000) >> 4;
+    } else {
+        color_code = (*palette_ptr & 0b11000000) >> 6;
+    }
+    return color_code;
+}
+
 void render_tile_row(uint8_t byte1, uint8_t byte2, int x, bool is_obj, uint8_t flags) {
 
     bool priority = flags & 0b10000000; //0 = No, 1 = BG and Window color indices 1–3 are drawn over this OBJ
@@ -235,16 +260,28 @@ void render_tile_row(uint8_t byte1, uint8_t byte2, int x, bool is_obj, uint8_t f
         uint8_t lo = (byte1 & b_mask) >> (7 - j);
         uint8_t hi = (byte2 & b_mask) >> (7 - j);
         uint8_t color_code = lo | (hi << 1);
-        if (is_obj == true && color_code == 0) continue;
-        if (is_obj == true && priority == true) { // any bg color except 0 overwrites the object
-            if (framebuffer[*LY * 160 + screen_x] != palette[0]){
-                continue;
+        if (!is_obj) {
+            color_code = convert_color_code(color_code, BGP);
+        } else {
+            if (color_code == 0) continue;
+            if (priority == true) { // any bg color except 0 overwrites the object
+                if (tempbuffer[*LY * 160 + screen_x] != 0){
+                    continue;
+                }
+            }
+            if ((flags & 0b00010000) == 0) { // 0 = OBP0
+                color_code = convert_color_code(color_code, OBP0);
+            } else {
+                color_code = convert_color_code(color_code, OBP1);
             }
         }
-        framebuffer[*LY * 160 + screen_x] = palette[color_code];
+        tempbuffer[*LY * 160 + screen_x] = color_code;
     }
 }
 static void show_frame() {
+    for (size_t i = 0; i < sizeof(tempbuffer); i++) {
+        framebuffer[i] = palette[tempbuffer[i]];
+    }
     SDL_UpdateTexture(texture, NULL, framebuffer, 160 * sizeof(uint32_t));
     SDL_RenderCopy(renderer, texture, NULL, NULL);
     SDL_RenderPresent(renderer);
